@@ -41,6 +41,7 @@ app.get('/expenses', async (req, res) => {
     })
     res.json(expenses)
   } catch (error) {
+    console.error('GET /expenses error:', error)
     res.status(500).json({ error: 'Failed to fetch expenses' })
   }
 })
