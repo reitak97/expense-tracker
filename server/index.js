@@ -32,11 +32,11 @@ app.use(clerkMiddleware())
 
 
 app.get('/expenses', async (req, res) => {
+  const userId = getAuth(req).userId
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
   try {
-    const userId = getAuth(req).userId
-    // findMany() = SELECT * FROM expenses ORDER BY date DESC
     const expenses = await prisma.expense.findMany({
-      where: { userId },  
+      where: { userId },
       orderBy: { date: 'desc' },
     })
     res.json(expenses)
@@ -48,6 +48,9 @@ app.get('/expenses', async (req, res) => {
 
 // POST /expenses — insert a new expense into the database
 app.post('/expenses', async (req, res) => {
+  const userId = getAuth(req).userId
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
+
   const { description, amount, category, date } = req.body
 
   if (!description || !amount || !date) {
@@ -57,35 +60,18 @@ app.post('/expenses', async (req, res) => {
   let aiCategory = category || 'Other'
   try {
     const message = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
-    max_tokens: 20,
-    messages: [
-      {
-        role: "user",
-        content: "Categorize this expense. Reply with ONLY one of these exact words: Food & Drink, Transport, Bills, Shopping, Health, Other. Expense: " + description
-
-      }
-    ]
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 20,
+      messages: [{ role: 'user', content: 'Categorize this expense. Reply with ONLY one of these exact words: Food & Drink, Transport, Bills, Shopping, Health, Other. Expense: ' + description }]
     })
     aiCategory = message.content[0].text.trim()
   } catch (error) {
     console.error('Error from Anthropic API:', error)
-
   }
 
- 
-
   try {
-    // create() = INSERT INTO expenses (...) VALUES (...)
-    // The database generates id and createdAt automatically (defined in schema)
     const expense = await prisma.expense.create({
-      data: {
-        description,
-        amount: Number(amount),
-        category: aiCategory || 'Other',
-        date,
-        userId: getAuth(req).userId,
-      },
+      data: { description, amount: Number(amount), category: aiCategory || 'Other', date, userId },
     })
     res.status(201).json(expense)
   } catch (error) {
@@ -95,23 +81,22 @@ app.post('/expenses', async (req, res) => {
 
 // PATCH /expenses/:id — update fields of an existing expense
 app.patch('/expenses/:id', async (req, res) => {
-  const allowed = ['description', 'amount', 'category', 'date']
+  const userId = getAuth(req).userId
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
 
-  // Build an object with only the fields that were sent
+  const allowed = ['description', 'amount', 'category', 'date']
   const data = {}
   allowed.forEach(field => {
     if (req.body[field] !== undefined) data[field] = req.body[field]
   })
 
   try {
-    // update() = UPDATE expenses SET ... WHERE id = ...
     const expense = await prisma.expense.update({
-      where: { id: req.params.id, userId: getAuth(req).userId },
+      where: { id: req.params.id, userId },
       data,
     })
     res.json(expense)
   } catch (error) {
-    // Prisma throws a specific error code when the record isn't found
     if (error.code === 'P2025') {
       return res.status(404).json({ error: 'Expense not found' })
     }
@@ -121,10 +106,12 @@ app.patch('/expenses/:id', async (req, res) => {
 
 // DELETE /expenses/:id — remove an expense from the database
 app.delete('/expenses/:id', async (req, res) => {
+  const userId = getAuth(req).userId
+  if (!userId) return res.status(401).json({ error: 'Unauthorized' })
+
   try {
-    // delete() = DELETE FROM expenses WHERE id = ...
     await prisma.expense.delete({
-      where: { id: req.params.id, userId: getAuth(req).userId },
+      where: { id: req.params.id, userId },
     })
     res.status(204).send()
   } catch (error) {
