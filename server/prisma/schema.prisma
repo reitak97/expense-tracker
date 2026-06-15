@@ -1,0 +1,27 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// This is your data model — it maps directly to a table in the database.
+// Each field becomes a column. Prisma uses this to generate the migration SQL.
+model Expense {
+  // @id marks this as the primary key
+  // @default(uuid()) means the database generates a unique id automatically
+  id          String   @id @default(uuid())
+  userId      String
+
+  description String
+  amount      Int      // stored in cents (e.g. 650 = $6.50)
+  category    String
+  date        String   // stored as "YYYY-MM-DD" string to match the frontend
+
+  // @default(now()) means the database sets this to the current timestamp on insert
+  createdAt   DateTime @default(now())
+
+  // userId will be added in Step 5 when auth exists
+}
