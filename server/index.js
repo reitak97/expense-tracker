@@ -17,7 +17,7 @@ const PORT = process.env.PORT || 3001
 // Creating multiple instances causes too many database connections.
 const prisma = new PrismaClient()
 
-app.use(cors({ origin: 'http://localhost:5173' }))
+app.use(cors({ origin: ['http://localhost:5173', 'https://expense-tracker-two-pi-27.vercel.app'] }))
 app.use(express.json())
 
 

@@ -17,7 +17,7 @@ export default function App() {
     if (!isSignedIn) return
     async function loadExpenses() {
       const token = await getToken()
-      const response = await fetch('http://localhost:3001/expenses', {
+      const response = await fetch(`${import.meta.env.VITE_API_URL}/expenses`, {
         headers: { 'Authorization': `Bearer ${token}` }
       })
       if (!response.ok) return
@@ -29,7 +29,7 @@ export default function App() {
 
   async function addExpense(expense) {
     const token = await getToken()
-    const response = await fetch('http://localhost:3001/expenses', {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/expenses`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
       body: JSON.stringify(expense)
@@ -47,7 +47,7 @@ export default function App() {
   // (it never modifies the original), which is what React needs.
   async function deleteExpense(id) {
     const token = await getToken()
-    const response = await fetch(`http://localhost:3001/expenses/${id}`, {
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/expenses/${id}`, {
       method: 'DELETE',
       headers: { 'Authorization': `Bearer ${token}` },
     })
