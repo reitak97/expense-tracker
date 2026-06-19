@@ -1,4 +1,12 @@
 const request = require('supertest')
+
+// Mock Clerk so tests don't need real API keys.
+// clerkMiddleware becomes a no-op; getAuth returns no userId (unauthenticated).
+jest.mock('@clerk/express', () => ({
+  clerkMiddleware: () => (req, res, next) => next(),
+  getAuth: () => ({ userId: null }),
+}))
+
 const app = require('./app')
 
 describe('Expense API auth guards', () => {
