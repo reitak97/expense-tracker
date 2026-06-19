@@ -31,7 +31,8 @@ app.use(clerkMiddleware())
 
 
 app.get('/expenses', async (req, res) => {
-  const { userId } = getAuth(req) || {}
+  let userId
+  try { userId = getAuth(req)?.userId } catch (_) {}
   if (!userId) return res.status(401).json({ error: 'Unauthorized' })
   try {
     const expenses = await prisma.expense.findMany({
@@ -47,7 +48,8 @@ app.get('/expenses', async (req, res) => {
 
 // POST /expenses — insert a new expense into the database
 app.post('/expenses', async (req, res) => {
-  const { userId } = getAuth(req) || {}
+  let userId
+  try { userId = getAuth(req)?.userId } catch (_) {}
   if (!userId) return res.status(401).json({ error: 'Unauthorized' })
 
   const { description, amount, category, date } = req.body
@@ -80,7 +82,8 @@ app.post('/expenses', async (req, res) => {
 
 // PATCH /expenses/:id — update fields of an existing expense
 app.patch('/expenses/:id', async (req, res) => {
-  const { userId } = getAuth(req) || {}
+  let userId
+  try { userId = getAuth(req)?.userId } catch (_) {}
   if (!userId) return res.status(401).json({ error: 'Unauthorized' })
 
   const allowed = ['description', 'amount', 'category', 'date']
@@ -105,7 +108,8 @@ app.patch('/expenses/:id', async (req, res) => {
 
 // DELETE /expenses/:id — remove an expense from the database
 app.delete('/expenses/:id', async (req, res) => {
-  const { userId } = getAuth(req) || {}
+  let userId
+  try { userId = getAuth(req)?.userId } catch (_) {}
   if (!userId) return res.status(401).json({ error: 'Unauthorized' })
 
   try {
