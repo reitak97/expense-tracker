@@ -1,64 +1,86 @@
-# AI-Powered Expense Tracker
+# CLAUDE.md
 
-Full-stack expense tracker with AI categorization. Built as a portfolio project for SWE intern applications.
-
-## Builder Context
-- Beginner. Strong-ish on frontend (HTML/CSS/JS/React), new to backend, databases, and deployment.
-- Building part-time (~6-10 hrs/week) alongside a summer internship. Internship is the priority.
-- Prefer simple, well-understood tools over clever ones. Explain backend/database/devops concepts when they come up.
+Context for Claude Code working in this repo. See `DESIGN.md` for architecture and
+the reasoning behind it — don't duplicate that here, reference it.
 
 ## Stack
-- **Frontend:** React + Vite, Tailwind CSS
-- **Backend:** Node.js + Express
-- **Database:** PostgreSQL via Supabase
-- **ORM:** Prisma (write JS instead of raw SQL)
-- **AI:** Anthropic API (Claude) — key lives ONLY on the backend, never the frontend
-- **Auth:** Supabase Auth or Clerk (do NOT hand-roll JWT)
-- **Charts:** Recharts
-- **Deploy:** Vercel (frontend) + Railway or Render (backend)
-- **CI/CD:** GitHub Actions (one simple workflow: run tests on push, deploy on merge to main)
-- **Testing:** Jest + Supertest (backend), a few React component tests. Meaningful, not exhaustive.
 
-## Architecture Mental Model
-Browser (React) → HTTP request → Express backend → Database (Postgres).
-The backend is the middleman. Only the backend touches the database and secret API keys.
+Node, Express, PostgreSQL (Prisma), AWS SQS, WebSockets, Anthropic API, Jest, GitHub Actions.
 
-## Data Model
-An **Expense**:
-- `id` — string/uuid (DB-generated)
-- `description` — string (e.g., "Starbucks coffee")
-- `amount` — number (store in cents/integer to avoid float bugs, or decimal — decide and stay consistent)
-- `category` — string (e.g., "Food & Drink", "Transport", "Bills") — AI-assigned, user can override
-- `date` — date/timestamp
-- `userId` — string (foreign key to the user; added once auth exists)
-- `createdAt` — timestamp (DB-generated)
+## Commands
 
-A **User** (handled largely by the auth provider):
-- `id`, `email`, `createdAt`
-
-## API Endpoints (build/test with Thunder Client before wiring the frontend)
-- `GET /expenses` — list current user's expenses
-- `POST /expenses` — create one (backend calls Anthropic to auto-assign `category`)
-- `PATCH /expenses/:id` — edit (incl. manual category override)
-- `DELETE /expenses/:id` — delete one
-
-## Build Order (do NOT skip ahead)
-1. **Static UI with hardcoded data** — React state only, no backend. List + add form + delete. ← CURRENT STEP
-2. **Express API** — the four endpoints above, in-memory data, test with Thunder Client.
-3. **Database** — Supabase + Prisma, swap in-memory array for DB queries.
-4. **Connect frontend to backend** — replace hardcoded data with `fetch`. Expect CORS errors; that's normal.
-5. **Auth** — Supabase Auth / Clerk. Scope all expenses to the logged-in user.
-6. **AI categorization** — backend receives expense → calls Anthropic → saves returned category.
-7. **Analytics dashboard** — Recharts: spending by category (pie), monthly trend (line).
-8. **Deploy** — Vercel + Railway/Render. A live URL is the priority.
-9. **Testing + CI/CD** — a handful of API tests, basic GitHub Actions workflow.
-10. **README + demo GIF** — clean architecture explanation, screenshots. Recruiters skim GitHub.
-
-## Stretch Goals (cut first if behind)
-- Budget forecasting — if done, be honest about what it is (e.g., "projected spend from trailing 3-month average"), don't oversell as ML.
-- Receipt photo parsing.
+- Install: `npm install`
+- Dev server (API): `npm run dev`
+- Run worker: `npm run worker`
+- Test: `npm test`
+- Test, single file: `npm test -- path/to/file.test.js`
+- Lint: `npm run lint`
+- Lint, fix: `npm run lint -- --fix`
+- DB migrate (dev): `npx prisma migrate dev`
+- DB studio: `npx prisma studio`
 
 ## Conventions
-- Keep secrets in `.env`, never commit them. Add `.env` to `.gitignore` immediately.
-- Frontend and backend in separate folders (e.g., `/client`, `/server`) or separate repos.
-- Commit often with clear messages — the git history is itself a portfolio signal.
+
+- Architecture and design decisions live in `DESIGN.md` — read it before proposing
+  changes to queue structure, batching, or retry logic. If an implementation needs to
+  deviate from it, update the doc, don't let it drift silently.
+- All database queries must be scoped by `user_id`. Never write a query that could
+  return another user's rows.
+- Idempotency is load-bearing, not optional: imports are keyed by
+  `(user_id, idempotency_key)`, transactions by `(import_id, row_index)`. Any new
+  write path touching these tables needs the same guarantee.
+- Batches are the unit of retry and progress, not individual rows. Don't introduce
+  per-row queue messages.
+- New API endpoints need a corresponding test in `__tests__/`. Worker logic needs
+  coverage for at least one redelivery/duplicate scenario, not just the happy path.
+- Prefer explicit error handling over silent catch blocks, especially in the worker —
+  a swallowed error there is a batch stuck in PENDING with no signal.
+
+## Development workflow
+
+- **Test-first for anything with a failure mode.** Before writing the batching logic,
+  the idempotency check, or the DLQ path, write the test that describes the behavior
+  (including the failure case from the `DESIGN.md` failure-modes table) so it fails,
+  then implement to make it pass. Straightforward CRUD (a new field on an endpoint)
+  doesn't need this ceremony — reserve TDD for the parts that are actually tricky:
+  concurrency, retries, partial failure.
+- **Small, reviewable commits.** One logical change per commit, not "wip" dumps. Each
+  commit should leave tests passing.
+- **Fail fast, fail loud.** No silent fallbacks that mask a broken assumption — a
+  misconfigured env var or an unreachable queue should error at startup, not surface
+  three layers deep as an obscure bug.
+- **Feature branches, PR before merge to main**, even solo — keeps `main` deployable
+  and gives you a diff to walk through in an interview.
+- **Don't build ahead of the current step.** If implementing the worker, don't also
+  refactor the API's auth layer in the same pass. Separate concerns, separate commits.
+- **Dependency direction matters.** Worker and API both depend on `/lib` (normalization,
+  cache, db client); `/lib` depends on neither. Don't let the worker reach into `/api`
+  internals or vice versa.
+
+## Code style
+
+- ESLint + Prettier govern formatting — don't hand-format, run the lint fix command
+  instead of arguing with it.
+- `async/await` over raw `.then()` chains.
+- No silent `catch {}` blocks — see worker error-handling note above.
+- Prefer named exports over default exports.
+- Functions that touch the database take `userId` as an explicit parameter; never
+  pull it implicitly from a shared/global context.
+- Env vars validated at startup (fail fast), not read ad hoc where used.
+- Commit messages: short imperative subject line (`add batch retry logic`, not
+  `added` or `adding`).
+
+## Structure (adjust as the repo takes shape)
+
+```
+/api        Express app, request handlers, enqueue logic
+/worker     SQS poller, categorization, upserts
+/prisma     schema.prisma, migrations
+/lib        shared: normalization, cache, WebSocket broadcast
+__tests__/
+```
+
+## Out of scope
+
+- Bank account linking / Plaid. Input is user-uploaded CSV only.
+- Multi-tenant throughput tuning. Optimize for correctness under concurrency first.
