@@ -7,7 +7,10 @@ jest.mock('@clerk/express', () => ({
   getAuth: () => ({ userId: null }),
 }))
 
-const app = require('./app')
+// '../app' rather than './app' — this file now sits one directory deeper.
+// Requiring app.js directly (instead of index.js) is what keeps the suite
+// runnable without a DATABASE_URL: index.js is where validateEnv runs.
+const app = require('../app')
 
 describe('Expense API auth guards', () => {
   test('GET /expenses with no token returns 401', async () => {
