@@ -19,6 +19,8 @@ const { validateEnv } = require('./lib/env')
 // The worker will call this same function with its own different list
 // (DATABASE_URL, the SQS queue URL, AWS region — but no Clerk key, since it
 // never handles an HTTP request). That's why the list is an argument.
+// DIRECT_URL is not listed: it's read by the Prisma CLI during migrations, not
+// by the running server, so a missing one shouldn't stop the API from booting.
 validateEnv(['DATABASE_URL', 'CLERK_SECRET_KEY', 'ANTHROPIC_API_KEY'])
 
 // app.js builds the Express app (routes, middleware) but never starts it.

@@ -4,7 +4,19 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+
+  // Everyday queries go through Supabase's transaction pooler (port 6543).
+  // Two reasons: the direct host (db.<ref>.supabase.co) is IPv6-only and many
+  // networks — including this one — have no IPv6 route to it, and pooling is
+  // what keeps two processes (API + worker) from exhausting Postgres
+  // connections once the worker is running.
+  url = env("DATABASE_URL")
+
+  // Migrations go through the session pooler (port 5432) instead. The
+  // transaction pooler multiplexes many clients onto few Postgres connections,
+  // which breaks the prepared statements and session state that DDL needs.
+  // Prisma uses this URL only for `migrate` and `db push`, never for queries.
+  directUrl = env("DIRECT_URL")
 }
 
 // --- Status enums ---
