@@ -16,16 +16,13 @@ const anthropic = new Anthropic();
 
 const express = require('express')
 const cors = require('cors')
-// Import the generated Prisma client — this is what talks to the database
-const { PrismaClient } = require('@prisma/client')
+// The shared database client. Lives in lib/ because the worker process needs
+// it too — see the comment in lib/prisma.js for why that matters.
+const { prisma } = require('./lib/prisma')
 
 // The Express application instance. Routes get attached to this below;
 // index.js later calls app.listen() to actually start it.
 const app = express()
-
-// One shared PrismaClient instance for the whole app.
-// Creating multiple instances causes too many database connections.
-const prisma = new PrismaClient()
 
 // CORS: by default, browsers block a page on one origin (your Vite dev
 // server / deployed frontend) from calling an API on another origin (this
