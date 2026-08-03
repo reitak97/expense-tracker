@@ -7,21 +7,164 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// --- Status enums ---
+// An enum becomes a real Postgres type, so the database itself rejects a value
+// outside this list. Stricter than a String column, and Prisma generates
+// matching JS constants so a typo is a build-time error rather than a row
+// that quietly never matches any query.
+
+enum ImportStatus {
+  PENDING // row created, batches enqueued, nothing processed yet
+  PROCESSING // at least one batch has been picked up
+  COMPLETED // every batch finished (some rows may have failed)
+  FAILED // the import could not proceed at all
+}
+
+enum BatchStatus {
+  PENDING // enqueued, not yet received by a worker
+  PROCESSING // a worker has it and the visibility timeout is ticking
+  COMPLETED // rows committed, message deleted from the queue
+  FAILED // exhausted maxReceiveCount and landed in the DLQ
+}
+
 // This is your data model — it maps directly to a table in the database.
 // Each field becomes a column. Prisma uses this to generate the migration SQL.
 model Expense {
   // @id marks this as the primary key
   // @default(uuid()) means the database generates a unique id automatically
-  id          String   @id @default(uuid())
-  userId      String
+  id     String @id @default(uuid())
+  userId String
 
   description String
-  amount      Int      // stored in cents (e.g. 650 = $6.50)
+  amount      Int // stored in cents (e.g. 650 = $6.50)
   category    String
-  date        String   // stored as "YYYY-MM-DD" string to match the frontend
+  date        String // stored as "YYYY-MM-DD" string to match the frontend
 
   // @default(now()) means the database sets this to the current timestamp on insert
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  // userId will be added in Step 5 when auth exists
+  // --- Import provenance (null for manually-entered expenses) ---
+  // The ? makes these optional. A row typed into the form has no import, so
+  // both stay null; a row from a CSV carries the import it came from and its
+  // position in that file.
+  importId String?
+  rowIndex Int?
+  import   Import? @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  // The row-level idempotency guarantee from DESIGN.md. A redelivered batch
+  // re-inserts the same (importId, rowIndex) pairs, and this constraint turns
+  // those writes into no-ops instead of duplicates.
+  //
+  // Critically, this does NOT interfere with manual entry: Postgres treats
+  // NULLs as distinct from each other in a unique index, so any number of
+  // rows with importId = NULL coexist happily. That property is the whole
+  // reason imported and manual expenses can share one table.
+  @@unique([importId, rowIndex])
+  // Every list/chart query filters by userId and sorts by date. Without this
+  // index Postgres scans the whole table; with it, it jumps straight to the
+  // user's slice already ordered.
+  @@index([userId, date])
+}
+
+// One row per uploaded file.
+model Import {
+  id     String @id @default(uuid())
+  userId String
+
+  // The import-level idempotency guarantee. The client sends this as the
+  // Idempotency-Key header; if the same user retries the same upload, the
+  // unique constraint below makes the insert fail and the API returns the
+  // existing import instead of starting a second one.
+  idempotencyKey String
+
+  filename String
+  status   ImportStatus @default(PENDING)
+
+  // Denormalized counters so the progress UI can render without aggregating
+  // over every batch and row on each poll.
+  totalRows  Int
+  failedRows Int @default(0)
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  batches   ImportBatch[]
+  expenses  Expense[]
+  rowErrors ImportRowError[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+}
+
+// One row per queue message. Batches — not individual rows — are the unit of
+// retry and of progress, per DESIGN.md.
+model ImportBatch {
+  id       String @id @default(uuid())
+  importId String
+  import   Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  // Position of this batch within the file. Combined with importId it forms
+  // the identity a redelivered message is matched on.
+  batchIndex Int
+  rowCount   Int
+  status     BatchStatus @default(PENDING)
+
+  // Number of times a worker has picked this batch up. Useful for telling a
+  // transient failure apart from a deterministic one when reading the DLQ.
+  attempts Int @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  @@unique([importId, batchIndex])
+  @@index([importId, status])
+}
+
+// Rows that failed validation or categorization.
+//
+// These live here rather than in Expense on purpose. DESIGN.md says failed
+// rows are recorded with a reason so the user can review and re-submit them —
+// but they are not money anyone actually spent. Putting them in Expense would
+// mean every existing list query and both charts need a status filter, and
+// forgetting that filter anywhere shows the user spending that never happened.
+// Separate table, and Expense keeps meaning exactly one thing.
+model ImportRowError {
+  id       String @id @default(uuid())
+  importId String
+  import   Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  rowIndex Int
+  // The original CSV line, so the user can see what failed without reopening
+  // the file they uploaded.
+  rawRow   String
+  reason   String
+
+  createdAt DateTime @default(now())
+
+  // Same idempotency reasoning as Expense: replaying a batch must not append
+  // a second copy of an error already recorded.
+  @@unique([importId, rowIndex])
+}
+
+// Normalized merchant name -> category, so the LLM is called once per distinct
+// merchant instead of once per transaction. DESIGN.md calls this the primary
+// cost and latency lever in the system.
+model MerchantCache {
+  // The hash of the normalized merchant string IS the primary key — there is
+  // no separate id. Lookups are "hash this merchant, fetch by that hash",
+  // which is a single indexed point read.
+  normalizedHash String @id
+
+  // The normalized string the hash was derived from. Not needed for lookups;
+  // kept so you can inspect what collapsed into what when a categorization
+  // looks wrong. Debuggability for a rule set DESIGN.md admits can over-merge.
+  normalized String
+  category   String
+
+  // Cache is global, not per-user: "starbucks" is coffee for everyone, and
+  // sharing it across users is most of the cost saving. Nothing user-specific
+  // is stored here — only a scrubbed merchant name and its category.
+  hitCount  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
