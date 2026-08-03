@@ -72,13 +72,28 @@ Node, Express, PostgreSQL (Prisma), AWS SQS, WebSockets, Anthropic API, Jest, Gi
 
 ## Structure (adjust as the repo takes shape)
 
+`client/` (React + Vite) and `server/` are separate. The API and the worker are two
+processes but **one** npm package — same `server/package.json`, different entrypoints,
+deployed as two Render services with different start commands.
+
 ```
-/api        Express app, request handlers, enqueue logic
-/worker     SQS poller, categorization, upserts
-/prisma     schema.prisma, migrations
-/lib        shared: normalization, cache, WebSocket broadcast
-__tests__/
+server/
+  index.js    API entrypoint    — loads + validates env, then listens
+  worker.js   worker entrypoint — loads + validates env, then polls SQS
+  app.js      builds the Express app (no listen, no env loading)
+  api/        routers, request handlers, enqueue logic, HTTP middleware
+  worker/     SQS poller, categorization, upserts
+  lib/        shared: prisma client, env, normalization, cache, WS broadcast
+  prisma/     schema.prisma, migrations
+  __tests__/
 ```
+
+`api/` and `worker/` may import from `lib/`; `lib/` imports from neither, and nothing
+in `worker/` reaches into `api/`.
+
+Entrypoints load and validate configuration; modules stay importable. `app.js` must not
+call `validateEnv()` — the test suite imports it directly and CI runs without a
+`DATABASE_URL`.
 
 ## Out of scope
 
