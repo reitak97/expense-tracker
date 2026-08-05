@@ -116,6 +116,27 @@ model ImportRowError {
   @@unique([importId, rowIndex])
 }
 
+// A user's correction for one merchant, beating the shared cache.
+//
+// Bank rows carry no line items, so "walmart" can only ever be categorized by
+// what kind of shop it is — wrong for anyone who buys groceries there. This is
+// where that gets fixed per person without changing the default for everyone.
+model MerchantOverride {
+  userId         String
+  normalizedHash String
+
+  // Kept readable for the same reason as MerchantCache.normalized.
+  normalized String
+  category   String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The pair IS the key — one override per user per merchant, and the lookup
+  // is a single point read on exactly these two columns.
+  @@id([userId, normalizedHash])
+}
+
 // Normalized merchant -> category, so the LLM runs once per distinct merchant.
 model MerchantCache {
   // The hash IS the key: lookups are a single indexed point read.
