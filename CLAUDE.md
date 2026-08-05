@@ -69,6 +69,16 @@ Node, Express, PostgreSQL (Prisma), AWS SQS, WebSockets, Anthropic API, Jest, Gi
 - Env vars validated at startup (fail fast), not read ad hoc where used.
 - Commit messages: short imperative subject line (`add batch retry logic`, not
   `added` or `adding`).
+- Comments are one line per logical block, not per line. Say what the block does, or
+  why it's non-obvious — not both, and not a narration of the syntax.
+- Comment the surprising, skip the obvious. `// Rejects requests without a signed-in
+  user` earns its place; `// loop over the array` does not. Constraints worth a line:
+  API limits, ordering requirements, why an apparent bug is deliberate.
+- Longer reasoning goes in `DESIGN.md` or the commit message, not inline. If a decision
+  needs three paragraphs, it's an architecture decision, and it belongs where someone
+  will look for it.
+- When walking me through new code, explain the reasoning in chat rather than burying
+  it in the file.
 
 ## Structure (adjust as the repo takes shape)
 
