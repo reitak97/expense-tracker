@@ -40,12 +40,17 @@ async function sendBatchMessages(payloads) {
   for (let offset = 0; offset < payloads.length; offset += MAX_SEND_BATCH) {
     const chunk = payloads.slice(offset, offset + MAX_SEND_BATCH)
 
+    // AWS SDK v3 shape: build a Command describing the call, hand it to send().
     const result = await getClient().send(
       new SendMessageBatchCommand({
         QueueUrl: queueUrl(),
+        // Entries = the messages in this one call, max 10.
         Entries: chunk.map((payload, i) => ({
-          // Unique within the request only; absolute position keeps failures traceable.
+          // A label AWS echoes back so we can tell which entry failed.
+          // Unique within the request only; position in the whole list.
           Id: String(offset + i),
+          // SQS only carries strings, so the object is JSON-encoded here and
+          // JSON.parse'd by the worker on the other side.
           MessageBody: JSON.stringify(payload),
         })),
       })
