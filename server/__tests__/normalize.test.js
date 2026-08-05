@@ -1,23 +1,10 @@
-// Written before lib/normalize.js exists, per CLAUDE.md's test-first rule for
-// anything with a real failure mode. Normalization has two opposite ways to be
-// wrong, and the tests exist to pin down which one we prefer:
-//
-//   under-merge: "STARBUCKS #1" and "STARBUCKS #2" hash differently, so the
-//                LLM gets called twice. Costs a fraction of a cent.
-//   over-merge:  "SHELL" (gas) and "SHELL FISH MARKET" collapse together, so
-//                every seafood purchase gets categorized as Transport. Costs
-//                the user's trust in their own data, silently.
-//
-// Those are not symmetric, so the rules below are deliberately conservative:
-// when in doubt, leave the string alone and pay for the extra LLM call.
-// DESIGN.md:128 makes the same call.
+// Written before lib/normalize.js existed. The rules are deliberately narrow:
+// under-merging costs an extra LLM call, over-merging silently miscategorizes.
 
 const { normalizeMerchant, hashMerchant } = require('../lib/normalize')
 
 describe('normalizeMerchant', () => {
-  // The exact example from DESIGN.md:117-120 — three raw descriptors that must
-  // collapse to one cache key. If this block fails, the caching layer's whole
-  // premise is broken.
+  // The DESIGN.md example. If this fails, the caching layer has no premise.
   test('collapses the DESIGN.md Starbucks example to one value', () => {
     const variants = [
       'STARBUCKS #4471 SEATTLE WA',
@@ -30,26 +17,23 @@ describe('normalizeMerchant', () => {
 
   describe('payment processor prefixes', () => {
     test.each([
-      ['SQ *BLUE BOTTLE', 'blue bottle'],       // Square
-      ['TST* PIZZERIA', 'pizzeria'],            // Toast
+      ['SQ *BLUE BOTTLE', 'blue bottle'],
+      ['TST* PIZZERIA', 'pizzeria'],
       ['PAYPAL *STEAM GAMES', 'steam games'],
       ['PY *LOCAL GYM', 'local gym'],
     ])('strips %s', (raw, expected) => {
       expect(normalizeMerchant(raw)).toBe(expected)
     })
 
+    // An asterisk not preceded by a known processor token is left alone.
     test('does not strip a bare asterisk mid-name', () => {
-      // The prefix pattern is "known processor token, then asterisk". An
-      // asterisk that isn't part of that shape is left alone rather than
-      // guessed at.
       expect(normalizeMerchant('A*B HARDWARE')).toBe('a*b hardware')
     })
   })
 
   describe('store numbers and trailing location', () => {
+    // The main rule, and why the Starbucks case works.
     test('drops everything from the store number onward', () => {
-      // Once a #1234 token appears, the rest of the descriptor is store/location
-      // noise. This is the main rule, and it is why the Starbucks case works.
       expect(normalizeMerchant('TARGET #2841 ANN ARBOR MI')).toBe('target')
     })
 
@@ -57,9 +41,8 @@ describe('normalizeMerchant', () => {
       expect(normalizeMerchant('WALGREENS 04412')).toBe('walgreens')
     })
 
+    // Leading digits are the brand, not a store number.
     test('keeps digits that are part of the brand', () => {
-      // "7-ELEVEN" and "76" are the merchant, not a store number. Leading
-      // digits are never treated as location noise.
       expect(normalizeMerchant('7-ELEVEN 33812')).toBe('7-eleven')
       expect(normalizeMerchant('76 GAS STATION')).toBe('76 gas station')
     })
@@ -68,8 +51,8 @@ describe('normalizeMerchant', () => {
       expect(normalizeMerchant('WHOLE FOODS MKT WA')).toBe('whole foods mkt')
     })
 
+    // "GO" is not a state; stripping it would be an over-merge.
     test('does not strip a trailing two-letter word that is not a state', () => {
-      // "GO" is not a state code; stripping it would be an over-merge.
       expect(normalizeMerchant('ON THE GO')).toBe('on the go')
     })
   })
@@ -81,15 +64,14 @@ describe('normalizeMerchant', () => {
   })
 
   describe('degenerate input', () => {
-    // The worker calls this on every row of a user-supplied CSV. A blank
-    // description column must not throw and take a whole batch down with it.
+    // A blank description must not throw and take a batch of 100 down with it.
     test.each([
       ['', ''],
       ['   ', ''],
       [null, ''],
       [undefined, ''],
-      ['#4471', ''],   // nothing but a store number
-      ['SQ *', ''],    // nothing but a prefix
+      ['#4471', ''],
+      ['SQ *', ''],
     ])('handles %p without throwing', (raw, expected) => {
       expect(normalizeMerchant(raw)).toBe(expected)
     })
@@ -97,9 +79,8 @@ describe('normalizeMerchant', () => {
 })
 
 describe('hashMerchant', () => {
+  // Must be stable across processes and restarts, so nothing seeded per-run.
   test('is deterministic across calls', () => {
-    // The cache key must be stable across processes and restarts, which rules
-    // out anything seeded per-run.
     expect(hashMerchant('starbucks')).toBe(hashMerchant('starbucks'))
   })
 
@@ -107,8 +88,8 @@ describe('hashMerchant', () => {
     expect(hashMerchant('starbucks')).not.toBe(hashMerchant('peets coffee'))
   })
 
+  // Fixed width matters: this is a primary key column.
   test('produces a fixed-length hex string', () => {
-    // Fixed width matters: this value is a primary key column in MerchantCache.
     expect(hashMerchant('starbucks')).toMatch(/^[0-9a-f]{64}$/)
   })
 
