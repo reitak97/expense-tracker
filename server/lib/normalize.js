@@ -33,9 +33,10 @@ function normalizeMerchant(raw) {
   let tokens = s.split(/\s+/).filter(Boolean)
 
   // Everything from the store number onward is store/location noise.
-  // '#' counts anywhere; bare digits only from index 1, so "76 GAS" survives.
+  // A leading '#' or '*' marks one anywhere; bare digits only from index 1,
+  // so brands like "76 GAS STATION" survive.
   const storeNumberAt = tokens.findIndex(
-    (token, i) => token.startsWith('#') || (i > 0 && /^\d+$/.test(token))
+    (token, i) => /^[#*]/.test(token) || (i > 0 && /^\d+$/.test(token))
   )
   if (storeNumberAt !== -1) {
     tokens = tokens.slice(0, storeNumberAt)

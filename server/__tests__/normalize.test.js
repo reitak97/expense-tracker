@@ -41,6 +41,17 @@ describe('normalizeMerchant', () => {
       expect(normalizeMerchant('WALGREENS 04412')).toBe('walgreens')
     })
 
+    // Some banks mark store numbers with '*' rather than '#'.
+    test('treats a leading * the same as a leading #', () => {
+      expect(normalizeMerchant('STARBUCKS *4471 SEATTLE WA')).toBe('starbucks')
+      expect(normalizeMerchant('TARGET *2841')).toBe('target')
+    })
+
+    test('collapses # and * variants of the same merchant', () => {
+      expect(normalizeMerchant('STARBUCKS *4471 SEATTLE WA'))
+        .toBe(normalizeMerchant('STARBUCKS #0912 ANN ARBOR MI'))
+    })
+
     // Leading digits are the brand, not a store number.
     test('keeps digits that are part of the brand', () => {
       expect(normalizeMerchant('7-ELEVEN 33812')).toBe('7-eleven')
