@@ -33,11 +33,19 @@ jest.mock('@anthropic-ai/sdk', () =>
   }))
 )
 
+// Mock 4: the merchant cache. PATCH records an override as a side effect; these
+// tests check that it's called correctly, not how it writes.
+jest.mock('../lib/merchantCache', () => ({
+  setOverride: jest.fn(),
+}))
+
 // '../app', not './app' — this file sits one directory deeper now.
 const app = require('../app')
 
 // Same object the handlers hold, thanks to Node's module cache.
 const { prisma } = require('../lib/prisma')
+const { setOverride } = require('../lib/merchantCache')
+const { normalizeMerchant, hashMerchant } = require('../lib/normalize')
 
 const ALICE = 'user_alice'
 const BOB = 'user_bob'
@@ -245,6 +253,60 @@ describe('PATCH /expenses/:id', () => {
     expect(prisma.expense.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { amount: 0 } })
     )
+  })
+
+  // Recategorizing an imported row teaches the system for next time.
+  test('records a merchant override when recategorizing an imported expense', async () => {
+    mockUserId = ALICE
+    prisma.expense.update.mockResolvedValue({
+      ...expenseRow,
+      description: 'WALMART #1234 ANN ARBOR MI',
+      importId: 'imp_1',
+      rowIndex: 47,
+    })
+
+    await request(app).patch('/expenses/exp_1').send({ category: 'Food & Drink' })
+
+    expect(setOverride).toHaveBeenCalledWith(ALICE, {
+      normalizedHash: hashMerchant(normalizeMerchant('WALMART #1234 ANN ARBOR MI')),
+      normalized: 'walmart',
+      category: 'Food & Drink',
+    })
+  })
+
+  // A typed-in description is free text, not a merchant — storing it would
+  // pollute the override table with entries that never match anything.
+  test('does not record an override for a manually-entered expense', async () => {
+    mockUserId = ALICE
+    prisma.expense.update.mockResolvedValue({ ...expenseRow, importId: null })
+
+    await request(app).patch('/expenses/exp_1').send({ category: 'Transport' })
+
+    expect(setOverride).not.toHaveBeenCalled()
+  })
+
+  test('does not record an override when the category was not changed', async () => {
+    mockUserId = ALICE
+    prisma.expense.update.mockResolvedValue({ ...expenseRow, importId: 'imp_1' })
+
+    await request(app).patch('/expenses/exp_1').send({ description: 'Latte' })
+
+    expect(setOverride).not.toHaveBeenCalled()
+  })
+
+  // The user's edit succeeded; a bookkeeping failure shouldn't undo it.
+  test('still returns 200 when recording the override fails', async () => {
+    mockUserId = ALICE
+    prisma.expense.update.mockResolvedValue({
+      ...expenseRow,
+      description: 'WALMART #1234',
+      importId: 'imp_1',
+    })
+    setOverride.mockRejectedValueOnce(new Error('connection reset'))
+
+    const res = await request(app).patch('/expenses/exp_1').send({ category: 'Food & Drink' })
+
+    expect(res.status).toBe(200)
   })
 
   // "Doesn't exist" and "isn't yours" must look identical from outside.

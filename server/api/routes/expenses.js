@@ -7,6 +7,8 @@ const Anthropic = require('@anthropic-ai/sdk')
 const anthropic = new Anthropic()
 
 const { prisma } = require('../../lib/prisma')
+const { normalizeMerchant, hashMerchant } = require('../../lib/normalize')
+const { setOverride } = require('../../lib/merchantCache')
 const { requireAuth } = require('../middleware/requireAuth')
 
 const router = express.Router()
@@ -83,6 +85,27 @@ router.patch('/expenses/:id', async (req, res) => {
       where: { id: req.params.id, userId: req.userId },
       data,
     })
+
+    // Remember the correction so future imports of this merchant get it right.
+    // Imported rows only — a manual expense's description is free text like
+    // "lunch with Sam", which is not a merchant and would pollute the table.
+    if (data.category && expense.importId) {
+      const normalized = normalizeMerchant(expense.description)
+      if (normalized) {
+        try {
+          await setOverride(req.userId, {
+            normalizedHash: hashMerchant(normalized),
+            normalized,
+            category: data.category,
+          })
+        } catch (error) {
+          // The edit itself succeeded; failing to remember it is not worth
+          // turning the user's successful save into a 500.
+          console.error('Failed to record merchant override:', error)
+        }
+      }
+    }
+
     res.json(expense)
   } catch (error) {
     // P2025 = record not found. Missing and not-yours return the same 404 on
