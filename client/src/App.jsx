@@ -2,6 +2,9 @@ import { useState, useEffect } from 'react'
 import ExpenseForm from './components/ExpenseForm'
 import ExpenseList from './components/ExpenseList'
 import ExpenseChart from './components/ExpenseChart'
+// SignedIn/SignedOut: render children only when that auth state is true —
+// this is how the whole "logged out landing page" vs "app" split below works.
+// useAuth: hook giving access to isSignedIn and getToken() from anywhere.
 import { SignedIn, SignedOut, SignInButton, UserButton, useAuth } from '@clerk/clerk-react'
 
 
@@ -11,14 +14,22 @@ export default function App() {
   // `expenses` is the current value; `setExpenses` is the function to update it.
   // Whenever setExpenses is called, React re-renders the component with the new value.
   const [expenses, setExpenses] = useState([])
+  // getToken() returns a fresh Clerk session JWT to attach to API requests;
+  // isSignedIn drives both the effect below and the SignedIn/SignedOut JSX.
   const { getToken, isSignedIn } = useAuth()
 
+  // useEffect runs after render, whenever something in its dependency array
+  // ([isSignedIn]) changes — so this re-fires the moment the user signs in
+  // (it doesn't run on every render, only when isSignedIn's value flips).
   useEffect(() => {
-    if (!isSignedIn) return
+    if (!isSignedIn) return // nothing to fetch yet, avoids an unauthorized request
+    // Effects can't be async directly (React expects a cleanup function or
+    // nothing back, not a Promise), so the async work is wrapped in an
+    // inner function that's declared then immediately called below.
     async function loadExpenses() {
       const token = await getToken()
       const response = await fetch(`${import.meta.env.VITE_API_URL}/expenses`, {
-        headers: { 'Authorization': `Bearer ${token}` }
+        headers: { 'Authorization': `Bearer ${token}` } // this is what getAuth(req) on the server reads
       })
       if (!response.ok) return
       const data = await response.json()
@@ -27,6 +38,8 @@ export default function App() {
     loadExpenses()
   }, [isSignedIn])
 
+  // Passed down to ExpenseForm as the onAdd prop — the form calls this once
+  // the user submits, it doesn't know or care how the POST is implemented.
   async function addExpense(expense) {
     const token = await getToken()
     const response = await fetch(`${import.meta.env.VITE_API_URL}/expenses`, {
@@ -38,8 +51,11 @@ export default function App() {
       console.error('Failed to add expense')
       return
     }
-    
+
     const newExpense = await response.json()
+    // Prepend rather than append+refetch: the server already sends back the
+    // full row (including its DB-generated id and AI category), so the
+    // cheapest way to stay in sync is to just splice that response into state.
     setExpenses([newExpense, ...expenses])
   }
 
@@ -65,11 +81,16 @@ export default function App() {
   return (
     <>
 
+    {/* Both branches render in the tree at all times — Clerk decides at
+        runtime which one actually shows, based on auth state. So this is
+        never "loading" flicker, it's a clean either/or swap. */}
     <SignedOut>
       <div className="min-h-screen flex items-center justify-center bg-gray-50">
         <div className="text-center">
           <h1 className="text-3xl font-bold text-gray-900 mb-4">Welcome to Expense Tracker</h1>
           <p className="text-gray-500 mb-6">Please sign in to manage your expenses.</p>
+          {/* mode="modal" opens Clerk's prebuilt sign-in UI in a popup —
+              no custom login form to build or secure yourself. */}
           <SignInButton mode="modal">
             <button className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-indigo-500">
               Sign In
@@ -78,7 +99,7 @@ export default function App() {
         </div>
       </div>
     </SignedOut>
-      
+
     <SignedIn>
       <div className="min-h-screen bg-gray-50 py-10">
           <div className="max-w-2xl mx-auto px-4">
