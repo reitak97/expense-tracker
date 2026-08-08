@@ -20,13 +20,34 @@ if (args[0] === '--file') {
     process.exit(1)
   }
 
-  const lines = fs.readFileSync(path, 'utf8').split('\n').filter((l) => l.trim())
-  const header = lines[0].split(',').map((h) => h.trim().replace(/^"|"$/g, '').toLowerCase())
+  const lines = fs
+    .readFileSync(path, 'utf8')
+    .split(/\r?\n/)
+    .filter((l) => l.trim())
+
+  if (lines.length === 0) {
+    console.error('Empty CSV file')
+    process.exit(1)
+  }
+
+  const header = lines[0]
+    .split(',')
+    .map((h) => h.trim().replace(/^"|"$/g, '').toLowerCase())
 
   // Look for the column banks usually call description, or fall back to the
-  // widest column, which is nearly always the merchant text.
+  // widest column in the first few rows (nearly always the merchant text).
   let col = header.findIndex((h) => /desc|merchant|name|detail|payee|memo/.test(h))
-  if (col === -1) col = 0
+  if (col === -1) {
+    const widths = new Array(header.length).fill(0)
+    for (const line of lines.slice(1, 51)) {
+      const cells = line.split(',').map((c) => c.trim().replace(/^"|"$/g, ''))
+      for (let i = 0; i < widths.length; i++) {
+        widths[i] = Math.max(widths[i], (cells[i] || '').length)
+      }
+    }
+    col = widths.indexOf(Math.max(...widths))
+    if (col === -1) col = 0
+  }
 
   console.log(`column: "${header[col]}" (index ${col})\n`)
 
