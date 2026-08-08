@@ -78,7 +78,8 @@ Node, Express, PostgreSQL (Prisma), AWS SQS, WebSockets, Anthropic API, Jest, Gi
   needs three paragraphs, it's an architecture decision, and it belongs where someone
   will look for it.
 - When walking me through new code, explain the reasoning in chat rather than burying
-  it in the file.
+  it in the file and keep it short and concise, under 1 paragraph
+
 
 ## Structure (adjust as the repo takes shape)
 
