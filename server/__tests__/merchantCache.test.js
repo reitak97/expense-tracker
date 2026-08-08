@@ -91,6 +91,39 @@ describe('lookupCategories', () => {
     })
   })
 
+  // A merchant can sit in both tables at once. The shared row exists but was
+  // not what the caller got, so counting it would credit the cache for work
+  // the override did and overstate how much the cache is really carrying.
+  test('does not count a hit when an override shadowed the cached row', async () => {
+    prisma.merchantCache.findMany.mockResolvedValue([
+      { normalizedHash: WALMART, category: 'Shopping' },
+    ])
+    prisma.merchantOverride.findMany.mockResolvedValue([
+      { normalizedHash: WALMART, category: 'Food & Drink' },
+    ])
+
+    await lookupCategories(ALICE, [WALMART])
+
+    expect(prisma.merchantCache.updateMany).not.toHaveBeenCalled()
+  })
+
+  test('counts only the unshadowed merchants in a mixed batch', async () => {
+    prisma.merchantCache.findMany.mockResolvedValue([
+      { normalizedHash: WALMART, category: 'Shopping' },
+      { normalizedHash: STARBUCKS, category: 'Food & Drink' },
+    ])
+    prisma.merchantOverride.findMany.mockResolvedValue([
+      { normalizedHash: WALMART, category: 'Food & Drink' },
+    ])
+
+    await lookupCategories(ALICE, [WALMART, STARBUCKS])
+
+    expect(prisma.merchantCache.updateMany).toHaveBeenCalledWith({
+      where: { normalizedHash: { in: [STARBUCKS] } },
+      data: { hitCount: { increment: 1 } },
+    })
+  })
+
   test('skips the hit-count write when nothing was cached', async () => {
     await lookupCategories(ALICE, [STARBUCKS])
 

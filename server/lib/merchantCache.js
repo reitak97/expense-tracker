@@ -39,12 +39,18 @@ async function lookupCategories(userId, hashes) {
   for (const row of cached) found.set(row.normalizedHash, row.category)
   for (const row of overrides) found.set(row.normalizedHash, row.category)
 
-  // Diagnostic only: which merchants are actually carrying the cache. One
-  // extra query per batch, not per row, and skipped entirely on a full miss.
-  const cachedHashes = cached.map((row) => row.normalizedHash)
-  if (cachedHashes.length > 0) {
+  // Diagnostic only: which merchants are actually carrying the cache. A row
+  // the loop above overwrote was found but not served, so counting it would
+  // credit the cache for work the override did. One extra query per batch, not
+  // per row, and skipped entirely when nothing was served from the cache.
+  const overridden = new Set(overrides.map((row) => row.normalizedHash))
+  const servedFromCache = cached
+    .map((row) => row.normalizedHash)
+    .filter((hash) => !overridden.has(hash))
+
+  if (servedFromCache.length > 0) {
     await prisma.merchantCache.updateMany({
-      where: { normalizedHash: { in: cachedHashes } },
+      where: { normalizedHash: { in: servedFromCache } },
       data: { hitCount: { increment: 1 } },
     })
   }
