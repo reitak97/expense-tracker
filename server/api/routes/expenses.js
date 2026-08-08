@@ -34,8 +34,18 @@ router.get('/expenses', async (req, res) => {
 router.post('/expenses', async (req, res) => {
   const { description, amount, category, date } = req.body
 
+  // Absence, not falsiness — 0 is a legitimate amount. Empty string is checked
+  // separately because Number('') is 0, so a numeric test alone would let a
+  // blank form field through and save it as $0.00.
+  const trimmedAmount = typeof amount === 'string' ? amount.trim() : amount
+  const amountIsValid =
+    trimmedAmount !== undefined &&
+    trimmedAmount !== null &&
+    trimmedAmount !== '' &&
+    Number.isFinite(Number(trimmedAmount))
+
   // Validate before the AI call, so a doomed request costs nothing.
-  if (!description || !amount || !date) {
+  if (!description || !amountIsValid || !date) {
     return res.status(400).json({ error: 'description, amount, and date are required' })
   }
 

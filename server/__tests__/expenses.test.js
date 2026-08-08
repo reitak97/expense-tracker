@@ -247,6 +247,41 @@ describe('POST /expenses', () => {
     })
   })
 
+  // The POST twin of the PATCH `applies an amount of 0` test. A plain falsy
+  // check rejects a legitimate zero, so the guard has to test for absence.
+  test('accepts an amount of 0', async () => {
+    mockUserId = ALICE
+    prisma.expense.create.mockResolvedValue(expenseRow)
+
+    const res = await request(app)
+      .post('/expenses')
+      .send({ description: 'Free refill', amount: 0, date: '2026-06-18' })
+
+    expect(res.status).toBe(201)
+    expect(prisma.expense.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ amount: 0 }),
+    })
+  })
+
+  // The trap on the other side of that fix. An empty form field arrives as ''
+  // which is neither undefined nor null, so a guard written only against those
+  // lets it through and Number('') quietly stores a $0.00 expense — a wrong
+  // value saved silently, which is worse than the 400 it replaced.
+  test.each([
+    ['an empty string', ''],
+    ['a non-numeric string', 'abc'],
+    ['null', null],
+  ])('rejects %s as an amount', async (_label, amount) => {
+    mockUserId = ALICE
+
+    const res = await request(app)
+      .post('/expenses')
+      .send({ description: 'Coffee', amount, date: '2026-06-18' })
+
+    expect(res.status).toBe(400)
+    expect(prisma.expense.create).not.toHaveBeenCalled()
+  })
+
   test('rejects a request missing required fields before doing any work', async () => {
     mockUserId = ALICE
 
