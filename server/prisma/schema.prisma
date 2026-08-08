@@ -4,24 +4,150 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url      = env("DATABASE_URL")
+
+  // Transaction pooler. The direct host is IPv6-only and unroutable from many networks.
+  url = env("DATABASE_URL")
+
+  // Session pooler, migrations only — DDL needs session state the transaction pooler drops.
+  directUrl = env("DIRECT_URL")
 }
 
-// This is your data model — it maps directly to a table in the database.
-// Each field becomes a column. Prisma uses this to generate the migration SQL.
+// Real Postgres types, so the database rejects an out-of-range value.
+enum ImportStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+enum BatchStatus {
+  PENDING
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
 model Expense {
-  // @id marks this as the primary key
-  // @default(uuid()) means the database generates a unique id automatically
-  id          String   @id @default(uuid())
-  userId      String
+  id     String @id @default(uuid())
+  userId String
 
   description String
-  amount      Int      // stored in cents (e.g. 650 = $6.50)
+  amount      Int // cents, e.g. 650 = $6.50
   category    String
-  date        String   // stored as "YYYY-MM-DD" string to match the frontend
+  date        String // "YYYY-MM-DD", matching the frontend
 
-  // @default(now()) means the database sets this to the current timestamp on insert
-  createdAt   DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  // userId will be added in Step 5 when auth exists
+  // Null for manually-entered expenses; set for rows from a CSV import.
+  importId String?
+  rowIndex Int?
+  import   Import? @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  // Row-level idempotency: a redelivered batch re-inserts the same pairs and
+  // they become no-ops. Postgres treats NULLs as distinct, so manual entries
+  // never collide here.
+  @@unique([importId, rowIndex])
+  // Every list and chart query filters by user and sorts by date.
+  @@index([userId, date])
+}
+
+// One row per uploaded file.
+model Import {
+  id     String @id @default(uuid())
+  userId String
+
+  // Sent by the client as the Idempotency-Key header; the unique index below
+  // is what makes a retried upload return the existing import.
+  idempotencyKey String
+
+  filename String
+  status   ImportStatus @default(PENDING)
+
+  // Denormalized so the progress UI doesn't aggregate on every poll.
+  totalRows  Int
+  failedRows Int @default(0)
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  batches   ImportBatch[]
+  expenses  Expense[]
+  rowErrors ImportRowError[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, createdAt])
+}
+
+// One row per queue message — the unit of retry and progress.
+model ImportBatch {
+  id       String @id @default(uuid())
+  importId String
+  import   Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  batchIndex Int
+  rowCount   Int
+  status     BatchStatus @default(PENDING)
+
+  // Distinguishes a transient failure from a deterministic one in the DLQ.
+  attempts Int @default(0)
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  @@unique([importId, batchIndex])
+  @@index([importId, status])
+}
+
+// Rows that failed validation or categorization. Separate from Expense so
+// Expense keeps meaning money actually spent and no query needs a status filter.
+model ImportRowError {
+  id       String @id @default(uuid())
+  importId String
+  import   Import @relation(fields: [importId], references: [id], onDelete: Cascade)
+
+  rowIndex Int
+  // The original line, so the user can review without reopening the file.
+  rawRow   String
+  reason   String
+
+  createdAt DateTime @default(now())
+
+  // Replaying a batch must not append a second copy of the same error.
+  @@unique([importId, rowIndex])
+}
+
+// A user's correction for one merchant, beating the shared cache.
+//
+// Bank rows carry no line items, so "walmart" can only ever be categorized by
+// what kind of shop it is — wrong for anyone who buys groceries there. This is
+// where that gets fixed per person without changing the default for everyone.
+model MerchantOverride {
+  userId         String
+  normalizedHash String
+
+  // Kept readable for the same reason as MerchantCache.normalized.
+  normalized String
+  category   String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // The pair IS the key — one override per user per merchant, and the lookup
+  // is a single point read on exactly these two columns.
+  @@id([userId, normalizedHash])
+}
+
+// Normalized merchant -> category, so the LLM runs once per distinct merchant.
+model MerchantCache {
+  // The hash IS the key: lookups are a single indexed point read.
+  normalizedHash String @id
+
+  // Kept for debugging what collapsed into what; not used for lookups.
+  normalized String
+  category   String
+
+  // Global, not per-user — sharing across users is most of the cost saving.
+  hitCount  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
