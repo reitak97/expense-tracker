@@ -59,6 +59,26 @@ Worker (containerized, polls SQS)
 Postgres  ──►  WebSocket server  ──►  Client progress UI
 ```
 
+## Implementation status
+
+Tracked here rather than in `CLAUDE.md`, which is for conventions and is re-read every
+session — a task list there goes stale silently.
+
+- [x] Data model and migration (`imports`, `import_batches`, `transactions`,
+      `merchant_cache`, `merchant_overrides`, row errors)
+- [x] Merchant normalization and hashing (`lib/normalize.js`)
+- [x] Two-layer category lookup with per-user override precedence (`lib/merchantCache.js`)
+- [x] SQS wrapper shared by both processes (`lib/sqs.js`)
+- [x] `POST /imports` — parse, validate headers, persist, chunk, enqueue
+- [ ] Worker entrypoint and poll loop (`worker.js` — `npm run worker` is currently broken)
+- [ ] Batch processing: normalize → lookup → LLM misses → upsert on `(import_id, row_index)`
+- [ ] Partial failure: `ImportRowError` rows, batch continues
+- [ ] Redelivery/duplicate test coverage (write before the processing logic)
+- [ ] DLQ configuration and a poison-batch test
+- [ ] Progress over WebSockets (`lib/ws.js`) and the `GET /imports/:id` fallback
+- [ ] Client upload UI and progress
+- [ ] Worker deployed as a Render background service
+
 ## Key decisions
 
 ### Queue over in-process background job
@@ -179,6 +199,9 @@ process and shouldn't share a service.
 
 ## Open questions
 
-- Cache invalidation policy for merchant categories the user manually corrects.
+- ~~Cache invalidation policy for merchant categories the user manually corrects.~~
+  Resolved: a correction writes a per-user `MerchantOverride` that shadows the shared
+  cache rather than invalidating it, so one user's fix never changes anyone else's
+  default. See `lib/merchantCache.js`.
 - Whether to expose DLQ replay to users or keep it operator-only.
 - Backpressure if a single user uploads many large files concurrently.
