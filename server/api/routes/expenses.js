@@ -35,7 +35,7 @@ router.post('/expenses', async (req, res) => {
   const { description, amount, category, date } = req.body
 
   // Validate before the AI call, so a doomed request costs nothing.
-  if (!description || !amount || !date) {
+  if (!description || amount === undefined || amount === null || !date) {
     return res.status(400).json({ error: 'description, amount, and date are required' })
   }
 
