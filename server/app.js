@@ -5,6 +5,7 @@ const express = require('express')
 const cors = require('cors')
 const { clerkMiddleware } = require('@clerk/express')
 const { expensesRouter } = require('./api/routes/expenses')
+const { importsRouter } = require('./api/routes/imports')
 
 const app = express()
 
@@ -19,5 +20,8 @@ app.use(clerkMiddleware())
 
 // Must come after clerkMiddleware — requireAuth calls getAuth().
 app.use(expensesRouter)
+
+// Multipart, so it parses its own body — express.json() above ignores it.
+app.use(importsRouter)
 
 module.exports = app
