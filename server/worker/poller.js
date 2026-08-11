@@ -30,7 +30,7 @@ async function handleMessage(message, handleBatch) {
     // This will never parse, so redelivery cannot help — but deleting it would
     // destroy the evidence. Leaving it lets the redelivery count carry it to
     // the DLQ, which is inspectable.
-    console.error('Worker: message body is not valid JSON, leaving for the DLQ:', error.message)
+    console.error('Worker: message body is not valid JSON, leaving for the DLQ:', error)
     return
   }
 
