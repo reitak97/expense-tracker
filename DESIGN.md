@@ -70,14 +70,26 @@ session — a task list there goes stale silently.
 - [x] Two-layer category lookup with per-user override precedence (`lib/merchantCache.js`)
 - [x] SQS wrapper shared by both processes (`lib/sqs.js`)
 - [x] `POST /imports` — parse, validate headers, persist, chunk, enqueue
-- [ ] Worker entrypoint and poll loop (`worker.js` — `npm run worker` is currently broken)
-- [ ] Batch processing: normalize → lookup → LLM misses → upsert on `(import_id, row_index)`
-- [ ] Partial failure: `ImportRowError` rows, batch continues
-- [ ] Redelivery/duplicate test coverage (write before the processing logic)
-- [ ] DLQ configuration and a poison-batch test
-- [ ] Progress over WebSockets (`lib/ws.js`) and the `GET /imports/:id` fallback
-- [ ] Client upload UI and progress
-- [ ] Worker deployed as a Render background service
+- [x] Worker entrypoint and poll loop (`worker.js`, `worker/poller.js`)
+- [x] Batch processing: normalize → lookup → LLM misses → upsert on `(import_id, row_index)`
+      (`worker/processBatch.js`, `worker/categorize.js`, `worker/parseRow.js`)
+- [x] Partial failure: `ImportRowError` rows, batch continues
+- [x] Redelivery/duplicate test coverage (write before the processing logic)
+- [x] Poison-batch test (`__tests__/poisonBatch.test.js`) and the DLQ setup script
+      (`scripts/configure-dlq.js`)
+- [x] Progress over WebSockets (`lib/ws.js`) and the `GET /imports/:id` fallback
+- [x] Client upload UI and progress (`ImportUpload.jsx`, `useImportProgress.js`)
+- [x] Deploy config for both services (`render.yaml`)
+
+Left to do, and all of it needs credentials or a console rather than code:
+
+- [ ] Run `node scripts/configure-dlq.js --apply` against the real queue. Until this
+      lands there is no redrive policy, so a poison message redelivers forever and the
+      DLQ the worker's comments refer to does not exist.
+- [ ] `npx prisma migrate dev` for the new `ImportBatch.error` column
+- [ ] Apply `render.yaml` as a Render Blueprint and set the secrets it declares
+- [ ] CloudWatch alarm on the DLQ's `ApproximateNumberOfMessages` — a dead-letter queue
+      nobody watches is a slower way to lose data
 
 ## Key decisions
 
@@ -118,10 +130,14 @@ completes well inside the visibility timeout.
 
 ### Partial failure
 
-A batch is not atomic. Rows that fail validation or categorization are written with
-`status=FAILED` and an error reason; successful rows commit normally. The import completes
-with a count of failed rows the user can review and re-submit. A single bad row never
-blocks the other 9,999.
+A batch is not atomic. Rows that fail validation are written to `import_row_errors` with
+the original line and a reason; successful rows commit normally, in the same transaction.
+A separate table rather than a status column on `transactions`, so `Expense` keeps meaning
+money actually spent and no listing query needs a status filter. The import completes with
+a count of failed rows the user can review and re-submit, recounted from that table rather
+than accumulated so a redelivered batch cannot double-count. A single bad row never blocks
+the other 9,999 — and critically, a bad row must never throw out of the batch handler, or
+one malformed line would drag the whole batch to the DLQ.
 
 ### Dead-letter queue
 
@@ -154,6 +170,34 @@ The client cannot poll cheaply for a job that takes minutes. The worker updates 
 progress in Postgres; the WebSocket server pushes deltas to subscribers of that import.
 Connections are scoped by user, and the fallback if the socket drops is a REST endpoint
 returning current import status.
+
+**How the worker's writes reach the socket.** The worker and the API are separate
+processes, so the worker cannot touch the API's sockets. Three ways to bridge that were
+possible: the worker calls an internal API endpoint, Postgres `LISTEN/NOTIFY`, or the
+API polls. The API polls — but only imports that someone currently has open, once per
+import rather than once per viewer, and it only sends a frame when the numbers changed.
+
+That is not what "polling is too expensive" in the opening paragraph rules out. What is
+ruled out is every client polling over the internet on its own timer; one server-side
+query every 1.5 seconds for an import a human is actively watching is a rounding error
+next to the LLM calls happening at the same time. The alternatives cost more than they
+return here: an internal endpoint means a second auth surface between our own services,
+and `LISTEN/NOTIFY` does not survive Supabase's transaction pooler, which is what
+`DATABASE_URL` points at.
+
+**Tradeoff:** up to 1.5s of staleness, and the API does work proportional to viewers
+rather than to events. Revisit if a single import is ever watched by many people at once.
+
+### Row validation and the sign of an amount
+
+`amount` is stored as the magnitude in cents. Bank exports disagree about the sign of a
+debit — some write a purchase as `-6.50`, others as `6.50` — and `Expense` already means
+money spent, so the sign carries no information the column needs. `(1.23)`, `$`, and
+thousands separators are accepted and stripped.
+
+Dates are accepted as `YYYY-MM-DD` or `MM/DD/YYYY` and rejected otherwise. Anything more
+permissive has to guess at `03/04`, and silently importing a wrong date is worse than
+telling the user which row we could not read.
 
 ## Data model (relevant tables)
 
