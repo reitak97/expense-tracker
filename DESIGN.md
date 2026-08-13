@@ -83,9 +83,20 @@ session — a task list there goes stale silently.
 
 Left to do, and all of it needs credentials or a console rather than code:
 
-- [ ] Run `node scripts/configure-dlq.js --apply` against the real queue. Until this
-      lands there is no redrive policy, so a poison message redelivers forever and the
-      DLQ the worker's comments refer to does not exist.
+- [ ] Reconcile the queue with the code. `expense-imports` (us-east-2) already has
+      `expense-imports-dlq` attached with 14-day retention — that part is done — but its
+      `maxReceiveCount` is **3** while `MAX_RECEIVE_COUNT` in `lib/sqs.js` is **5**, and
+      its visibility timeout is **60s**. The mismatch is live: the worker records why a
+      batch failed on delivery 5, so with the queue giving up at 3 that never runs and a
+      poison batch reaches the DLQ with its import stuck at `PROCESSING` and no reason
+      recorded. 60s is also short for a batch that makes an Anthropic call before it
+      writes anything — an overrun means duplicate LLM calls, and a batch can exhaust its
+      redeliveries while succeeding every time.
+
+      `node scripts/configure-dlq.js --apply` sets both, but the app's IAM user is
+      correctly scoped to runtime actions and has no `sqs:SetQueueAttributes`. Either
+      grant it temporarily, run the script under an admin profile, or set the two values
+      in the console.
 - [ ] `npx prisma migrate dev` for the new `ImportBatch.error` column
 - [ ] Apply `render.yaml` as a Render Blueprint and set the secrets it declares
 - [ ] CloudWatch alarm on the DLQ's `ApproximateNumberOfMessages` — a dead-letter queue
