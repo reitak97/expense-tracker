@@ -17,6 +17,12 @@ app.use(cors({ origin: ALLOWED_ORIGINS }))
 // Without this, req.body is undefined on POST/PATCH.
 app.use(express.json())
 
+// What Render polls to decide the service is alive. Deliberately touches
+// nothing — a health check that queried Postgres would turn a database blip
+// into a restart loop, taking the API down for the one reason it was still
+// able to serve traffic through. Above clerkMiddleware so it needs no session.
+app.get('/health', (req, res) => res.json({ status: 'ok' }))
+
 // Parses auth off the request; rejecting is requireAuth's job, per router.
 app.use(clerkMiddleware())
 
