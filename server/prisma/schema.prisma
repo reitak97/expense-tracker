@@ -91,6 +91,10 @@ model ImportBatch {
   // Distinguishes a transient failure from a deterministic one in the DLQ.
   attempts Int @default(0)
 
+  // Written on the last delivery, before the message moves to the DLQ — the
+  // only in-app trace of a batch the queue is about to stop retrying.
+  error String?
+
   startedAt   DateTime?
   completedAt DateTime?
 
