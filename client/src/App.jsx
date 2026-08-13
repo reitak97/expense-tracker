@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import ExpenseForm from './components/ExpenseForm'
 import ExpenseList from './components/ExpenseList'
 import ExpenseChart from './components/ExpenseChart'
+import ImportUpload from './components/ImportUpload'
 // SignedIn/SignedOut: render children only when that auth state is true —
 // this is how the whole "logged out landing page" vs "app" split below works.
 // useAuth: hook giving access to isSignedIn and getToken() from anywhere.
@@ -18,9 +19,16 @@ export default function App() {
   // isSignedIn drives both the effect below and the SignedIn/SignedOut JSX.
   const { getToken, isSignedIn } = useAuth()
 
+  // Bumped to ask for the list again. An import needs this: the worker writes
+  // its rows straight to the database, so they only reach this component when
+  // it refetches. A counter rather than exposing the fetch itself keeps the
+  // fetching inside the effect below, where React wants it.
+  const [refreshKey, setRefreshKey] = useState(0)
+  const refreshExpenses = useCallback(() => setRefreshKey(key => key + 1), [])
+
   // useEffect runs after render, whenever something in its dependency array
-  // ([isSignedIn]) changes — so this re-fires the moment the user signs in
-  // (it doesn't run on every render, only when isSignedIn's value flips).
+  // changes — so this re-fires the moment the user signs in, and again whenever
+  // refreshKey moves (it doesn't run on every render).
   useEffect(() => {
     if (!isSignedIn) return // nothing to fetch yet, avoids an unauthorized request
     // Effects can't be async directly (React expects a cleanup function or
@@ -36,7 +44,7 @@ export default function App() {
       setExpenses(data)
     }
     loadExpenses()
-  }, [isSignedIn])
+  }, [isSignedIn, refreshKey])
 
   // Passed down to ExpenseForm as the onAdd prop — the form calls this once
   // the user submits, it doesn't know or care how the POST is implemented.
@@ -114,6 +122,9 @@ export default function App() {
               onAdd and onDelete are callback functions — the child calls them
               when something happens (form submit, delete click). */}
           <ExpenseForm onAdd={addExpense} />
+            {/* Refetches once the import settles — those rows were written by
+                the worker, so they never passed through local state. */}
+            <ImportUpload onImported={refreshExpenses} />
             <ExpenseList expenses={expenses} onDelete={deleteExpense} total={total} />
             <ExpenseChart expenses={expenses} />
         </div>
