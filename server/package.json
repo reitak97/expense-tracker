@@ -16,6 +16,7 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
     "@aws-sdk/client-sqs": "^3.1102.0",
+    "@clerk/backend": "^3.16.4",
     "@clerk/clerk-react": "^5.61.8",
     "@clerk/express": "^2.1.26",
     "@prisma/client": "^5.22.0",
@@ -24,7 +25,8 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "multer": "^2.2.0",
-    "prisma": "^5.22.0"
+    "prisma": "^5.22.0",
+    "ws": "^8.21.3"
   },
   "devDependencies": {
     "jest": "^30.4.2",

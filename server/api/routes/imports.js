@@ -11,6 +11,7 @@ const { parse } = require('csv-parse/sync')
 
 const { prisma } = require('../../lib/prisma')
 const { sendBatchMessages } = require('../../lib/sqs')
+const { getImportProgress } = require('../../lib/importProgress')
 const { requireAuth } = require('../middleware/requireAuth')
 
 const router = express.Router()
@@ -220,6 +221,25 @@ router.post('/imports', handleUpload, async (req, res) => {
 
   // 202, not 201: the import row exists but the work it describes has not run.
   res.status(202).json(importResponse(created))
+})
+
+// GET /imports/:id — current progress.
+//
+// The fallback for the WebSocket: same shape the socket pushes, so a client
+// whose connection drops can poll this instead and render identically.
+router.get('/imports/:id', async (req, res) => {
+  try {
+    const progress = await getImportProgress(req.userId, req.params.id)
+
+    // Missing and not-yours are the same 404, so the API doesn't leak that
+    // another user's import exists.
+    if (!progress) return res.status(404).json({ error: 'Import not found' })
+
+    res.json(progress)
+  } catch (error) {
+    console.error('GET /imports/:id error:', error)
+    res.status(500).json({ error: 'Failed to fetch import' })
+  }
 })
 
 module.exports = { importsRouter: router, BATCH_SIZE }

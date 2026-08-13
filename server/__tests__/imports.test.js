@@ -23,6 +23,7 @@ jest.mock('../lib/prisma', () => ({
   prisma: {
     import: {
       findUnique: jest.fn(),
+      findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
     },
@@ -90,6 +91,7 @@ beforeEach(() => {
 
   // Default: no prior import with this key, and the queue accepts everything.
   prisma.import.findUnique.mockResolvedValue(null)
+  prisma.import.findFirst.mockResolvedValue(null)
   prisma.import.create.mockResolvedValue(createdImport())
   sendBatchMessages.mockResolvedValue({ sent: 1, failed: [] })
 })
@@ -379,6 +381,116 @@ describe('POST /imports idempotency', () => {
     expect(res.status).toBe(200)
     expect(res.body.id).toBe('imp_winner')
     expect(sendBatchMessages).not.toHaveBeenCalled()
+  })
+})
+
+// The REST half of the progress channel. Same reader the socket pushes from,
+// so a client that loses its connection and polls sees identical numbers.
+describe('GET /imports/:id', () => {
+  // What prisma returns for the progress read: the import plus its batch
+  // statuses, which is where the percentage comes from.
+  function importWithBatches(statuses, overrides = {}) {
+    return {
+      id: 'imp_1',
+      filename: 'statement.csv',
+      status: 'PROCESSING',
+      totalRows: 300,
+      failedRows: 0,
+      createdAt: new Date('2026-06-18T00:00:00Z'),
+      completedAt: null,
+      batches: statuses.map((status) => ({ status })),
+      ...overrides,
+    }
+  }
+
+  beforeEach(() => {
+    mockUserId = ALICE
+  })
+
+  test('returns 401 with no token', async () => {
+    mockUserId = null
+
+    const res = await request(app).get('/imports/imp_1')
+
+    expect(res.status).toBe(401)
+    expect(prisma.import.findFirst).not.toHaveBeenCalled()
+  })
+
+  test('reports how many batches have settled', async () => {
+    prisma.import.findFirst.mockResolvedValue(
+      importWithBatches(['COMPLETED', 'COMPLETED', 'FAILED', 'PENDING'])
+    )
+
+    const res = await request(app).get('/imports/imp_1')
+
+    expect(res.status).toBe(200)
+    expect(res.body.batches).toEqual({ total: 4, settled: 3, failed: 1 })
+    expect(res.body.percentComplete).toBe(75)
+  })
+
+  // The query has to carry userId, or the id alone would return anyone's row.
+  test('scopes the lookup to the signed-in user', async () => {
+    mockUserId = BOB
+    prisma.import.findFirst.mockResolvedValue(importWithBatches(['COMPLETED']))
+
+    await request(app).get('/imports/imp_1')
+
+    expect(prisma.import.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'imp_1', userId: BOB } })
+    )
+  })
+
+  // Not 403: telling someone their guess was a real id is itself a leak.
+  test("returns 404 for another user's import", async () => {
+    prisma.import.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).get('/imports/imp_someone_else')
+
+    expect(res.status).toBe(404)
+  })
+
+  test('returns 404 for an import that does not exist', async () => {
+    prisma.import.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).get('/imports/nope')
+
+    expect(res.status).toBe(404)
+  })
+
+  test('reports 100 percent for a finished import', async () => {
+    prisma.import.findFirst.mockResolvedValue(
+      importWithBatches(['COMPLETED', 'COMPLETED'], {
+        status: 'COMPLETED',
+        failedRows: 2,
+        completedAt: new Date('2026-06-18T00:05:00Z'),
+      })
+    )
+
+    const res = await request(app).get('/imports/imp_1')
+
+    expect(res.body.percentComplete).toBe(100)
+    expect(res.body.status).toBe('COMPLETED')
+    expect(res.body.failedRows).toBe(2)
+  })
+
+  // A just-created import has batches but none settled, and the UI still needs
+  // a number to render rather than a NaN.
+  test('reports 0 percent before any batch settles', async () => {
+    prisma.import.findFirst.mockResolvedValue(
+      importWithBatches(['PENDING', 'PENDING'], { status: 'PENDING' })
+    )
+
+    const res = await request(app).get('/imports/imp_1')
+
+    expect(res.body.percentComplete).toBe(0)
+  })
+
+  test('returns 500 when the read fails', async () => {
+    prisma.import.findFirst.mockRejectedValue(new Error('connection reset'))
+
+    const res = await request(app).get('/imports/imp_1')
+
+    expect(res.status).toBe(500)
   })
 })
 

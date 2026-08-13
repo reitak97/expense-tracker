@@ -4,13 +4,15 @@
 const express = require('express')
 const cors = require('cors')
 const { clerkMiddleware } = require('@clerk/express')
+const { ALLOWED_ORIGINS } = require('./lib/allowedOrigins')
 const { expensesRouter } = require('./api/routes/expenses')
 const { importsRouter } = require('./api/routes/imports')
 
 const app = express()
 
-// Allowlist the two frontends permitted to call this API cross-origin.
-app.use(cors({ origin: ['http://localhost:5173', 'https://expense-tracker-two-pi-27.vercel.app'] }))
+// Allowlist the two frontends permitted to call this API cross-origin. The
+// WebSocket upgrade checks the same list separately — CORS doesn't cover it.
+app.use(cors({ origin: ALLOWED_ORIGINS }))
 
 // Without this, req.body is undefined on POST/PATCH.
 app.use(express.json())
