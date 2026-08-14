@@ -31,7 +31,9 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # See claude.yml: subscription auth via `claude setup-token`, so
+          # these reviews bill to the plan and not to API credits.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # Repo-specific on purpose. A generic reviewer re-derives style
           # opinions this project already settled in CLAUDE.md and DESIGN.md;
           # what it cannot know without being told is which invariants here are

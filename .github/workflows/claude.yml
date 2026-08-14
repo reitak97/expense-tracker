@@ -42,4 +42,10 @@ jobs:
 
       - uses: anthropics/claude-code-action@v1
         with:
-          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Subscription auth, not an API key. Generated locally with
+          # `claude setup-token`, which mints a long-lived token against the
+          # Claude Pro/Max plan — so runs draw on plan usage rather than
+          # metered API credits. Swap to `anthropic_api_key` if this ever
+          # needs to outlive the subscription; the two are interchangeable
+          # here and setting both makes the API key win.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
