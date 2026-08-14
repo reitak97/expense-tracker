@@ -65,13 +65,22 @@ async function subscribe(ws, userId, importId) {
   }
 
   const state = subscribers.get(ws)
-  state.importId = importId
   state.lastFrame = JSON.stringify(progress)
 
   // Sent immediately so the client renders current state rather than waiting
   // out a poll interval for its first frame.
   send(ws, { type: 'progress', progress })
-  if (isSettled(progress)) send(ws, { type: 'done', progress })
+
+  // An import that has already settled will never change again, so it is never
+  // added to the poll set. Subscribing to a finished import used to pin a query
+  // every 1.5s for the life of the socket.
+  if (isSettled(progress)) {
+    state.importId = null
+    send(ws, { type: 'done', progress })
+    return
+  }
+
+  state.importId = importId
 }
 
 /**
@@ -129,9 +138,15 @@ function attachWebSocketServer(httpServer) {
   const wss = new WebSocketServer({ noServer: true })
 
   httpServer.on('upgrade', async (request, socket, head) => {
-    // Only /ws is a progress socket. Anything else is left alone so a future
-    // upgrade handler on this server still gets its own paths.
-    if (new URL(request.url, 'http://localhost').pathname !== WS_PATH) return
+    // Attaching any 'upgrade' listener disables Node's own handling, so a path
+    // we don't serve has to be closed here or the socket is held open forever.
+    // This is the only upgrade handler on this server; adding a second one
+    // means routing between them rather than each returning early.
+    if (new URL(request.url, 'http://localhost').pathname !== WS_PATH) {
+      socket.write('HTTP/1.1 404 Not Found\r\nConnection: close\r\n\r\n')
+      socket.destroy()
+      return
+    }
 
     const origin = request.headers.origin
     if (origin && !ALLOWED_ORIGINS.includes(origin)) {
