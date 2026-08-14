@@ -38,10 +38,6 @@ export function useImportProgress(importId) {
   // this hook reset without writing state from the effect body.
   const [state, setState] = useState({ importId: null, progress: null, transport: 'idle', error: null })
 
-  // Read inside async callbacks that outlive the render that started them, so
-  // they can tell "still watching" from "the effect was torn down".
-  const cancelled = useRef(false)
-
   // The effect deliberately doesn't depend on `state`, so what it closes over is
   // frozen. Callbacks that need to know whether the import settled read this.
   const latest = useRef(null)
@@ -49,7 +45,12 @@ export function useImportProgress(importId) {
   useEffect(() => {
     if (!importId) return undefined
 
-    cancelled.current = false
+    // Local to this run, not a ref. A ref is shared across runs, so the next
+    // run resetting it to false would un-cancel the previous run's pending
+    // awaits — which then build a socket and an interval that the cleanup for
+    // that run has already finished and can no longer reach.
+    let cancelled = false
+
     latest.current = null
 
     let socket = null
@@ -67,7 +68,7 @@ export function useImportProgress(importId) {
     // The fallback path. Runs on any socket failure, and also covers a proxy
     // that silently refuses to upgrade.
     async function startPolling() {
-      if (cancelled.current || pollTimer) return
+      if (cancelled || pollTimer) return
 
       async function poll() {
         try {
@@ -78,7 +79,7 @@ export function useImportProgress(importId) {
           if (!response.ok) throw new Error(`Import status returned ${response.status}`)
 
           const next = await response.json()
-          if (cancelled.current) return
+          if (cancelled) return
 
           record(next, 'polling')
           if (isSettled(next)) {
@@ -86,7 +87,7 @@ export function useImportProgress(importId) {
             pollTimer = null
           }
         } catch (pollError) {
-          if (!cancelled.current) fail(pollError.message, 'polling')
+          if (!cancelled) fail(pollError.message, 'polling')
         }
       }
 
@@ -102,10 +103,10 @@ export function useImportProgress(importId) {
       } catch {
         // No token means no socket and no REST call either; surface it rather
         // than spinning on a connection that can never authenticate.
-        if (!cancelled.current) fail('Could not authenticate', 'idle')
+        if (!cancelled) fail('Could not authenticate', 'idle')
         return
       }
-      if (cancelled.current) return
+      if (cancelled) return
 
       try {
         socket = new WebSocket(socketUrl(token))
@@ -115,13 +116,13 @@ export function useImportProgress(importId) {
       }
 
       socket.onopen = () => {
-        if (cancelled.current) return
+        if (cancelled) return
         setState((previous) => ({ ...previous, importId, transport: 'socket' }))
         socket.send(JSON.stringify({ type: 'subscribe', importId }))
       }
 
       socket.onmessage = (event) => {
-        if (cancelled.current) return
+        if (cancelled) return
         const message = JSON.parse(event.data)
 
         if (message.type === 'progress' || message.type === 'done') {
@@ -135,14 +136,14 @@ export function useImportProgress(importId) {
       socket.onerror = () => startPolling()
       socket.onclose = () => {
         // A close after the import settled is the normal end, not a failure.
-        if (!cancelled.current && !isSettled(latest.current)) startPolling()
+        if (!cancelled && !isSettled(latest.current)) startPolling()
       }
     }
 
     connect()
 
     return () => {
-      cancelled.current = true
+      cancelled = true
       if (pollTimer) clearInterval(pollTimer)
       // Detached before closing, so onclose doesn't start polling an import
       // nobody is watching any more.
