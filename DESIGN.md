@@ -110,11 +110,6 @@ Done since:
       migrations run — the shape `.env.example` already documented, which the live `.env`
       had drifted from by pointing both at 5432. Verified both paths: `prisma migrate
       status` over the direct URL, and a live query over the pooled one.
-- [ ] Split the two database URLs. `DATABASE_URL` and `DIRECT_URL` are currently identical,
-      both on the session pooler (5432). Runtime belongs on the transaction pooler (6543,
-      `?pgbouncer=true`); only `DIRECT_URL` needs 5432, for the DDL that migrations run.
-      The worker holds a connection per batch across an LLM call and would be first to
-      exhaust the smaller pool.
 
 ## Key decisions
 
