@@ -152,8 +152,12 @@ function ImportStatus({ progress, transport, error, settled, onDone }) {
     return <p className="mt-2 text-sm text-gray-500">Queued. Waiting for the first update…</p>
   }
 
+  // Both come from the server. Rows rejected individually carry a reason;
+  // rows lost with a whole failed batch do not, and counting them as imported
+  // is how "1000 of 1000" gets reported when 900 landed.
   const failedRows = progress.failedRows ?? 0
-  const importedRows = progress.totalRows - failedRows
+  const unprocessedRows = progress.unprocessedRows ?? 0
+  const importedRows = progress.importedRows ?? progress.totalRows - failedRows
 
   return (
     <div className="mt-2">
@@ -188,6 +192,12 @@ function ImportStatus({ progress, transport, error, settled, onDone }) {
               rows.
               {failedRows > 0 && (
                 <span className="text-amber-600"> {failedRows} rows couldn&apos;t be read.</span>
+              )}
+              {unprocessedRows > 0 && (
+                <span className="text-amber-600">
+                  {' '}
+                  {unprocessedRows} rows were in a batch that failed and can be re-uploaded.
+                </span>
               )}
             </p>
           ) : (

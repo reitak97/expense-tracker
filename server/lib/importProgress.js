@@ -28,7 +28,7 @@ async function getImportProgress(userId, importId) {
       failedRows: true,
       createdAt: true,
       completedAt: true,
-      batches: { select: { status: true } },
+      batches: { select: { status: true, rowCount: true } },
     },
   })
 
@@ -38,12 +38,23 @@ async function getImportProgress(userId, importId) {
   const outstanding = record.batches.filter((b) => OUTSTANDING.includes(b.status)).length
   const failed = record.batches.filter((b) => b.status === 'FAILED').length
 
+  // Rows in batches that died as a unit. They are not counted in failedRows:
+  // that comes from ImportRowError, and a batch that never finished wrote none.
+  // Without this the UI reports every row it didn't reject as imported.
+  const unprocessedRows = record.batches
+    .filter((b) => b.status === 'FAILED')
+    .reduce((sum, b) => sum + b.rowCount, 0)
+
   return {
     id: record.id,
     filename: record.filename,
     status: record.status,
     totalRows: record.totalRows,
+    // Rows rejected one at a time, with a reason the user can read.
     failedRows: record.failedRows,
+    // Rows lost with a whole batch, which have no per-row reason.
+    unprocessedRows,
+    importedRows: record.totalRows - record.failedRows - unprocessedRows,
     createdAt: record.createdAt,
     completedAt: record.completedAt,
     batches: {
