@@ -44,8 +44,11 @@ async function handleMessage(message, handleBatch) {
     // Deliberately not deleted. The visibility timeout expiring is what
     // schedules the retry, and after maxReceiveCount the queue moves it to the
     // DLQ rather than looping forever.
+    // Optional chaining because a body of literal `null` parses fine and gets
+    // this far. Throwing out of this function would abort the rest of the
+    // window, which is the one thing it promises not to do.
     console.error(
-      `Worker: batch ${payload.batchId} failed on delivery ${receiveCount}, leaving for redelivery:`,
+      `Worker: batch ${payload?.batchId ?? '<unidentified>'} failed on delivery ${receiveCount}, leaving for redelivery:`,
       error.message
     )
     return
