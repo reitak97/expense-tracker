@@ -133,10 +133,22 @@ async function processBatch(payload, { receiveCount = 1 } = {}) {
   if (!userId) throw new Error(`Batch ${batchId} is missing userId`)
   if (!Array.isArray(rows)) throw new Error(`Batch ${batchId} is missing its rows`)
 
-  await prisma.importBatch.update({
-    where: { id: batchId },
+  // updateMany rather than update, so the batch can be matched on the whole
+  // ownership chain instead of its id alone: this batch, in this import, owned
+  // by this user. The producer builds all three from one authenticated request,
+  // so they always agree today — this is what keeps that an enforced invariant
+  // rather than an assumed one, and it costs no extra round trip.
+  const claimed = await prisma.importBatch.updateMany({
+    where: { id: batchId, importId, import: { userId } },
     data: { status: 'PROCESSING', attempts: receiveCount, startedAt: new Date() },
   })
+
+  // Nothing matched: the ids don't belong together, or the import is gone.
+  // Either way this message can never do meaningful work, so it fails here
+  // without having written anything.
+  if (claimed.count === 0) {
+    throw new Error(`Batch ${batchId} does not belong to import ${importId} for this user`)
+  }
 
   try {
     const { valid, failed } = validateRows(rows)
@@ -160,6 +172,8 @@ async function processBatch(payload, { receiveCount = 1 } = {}) {
         data: failed.map((f) => ({ importId, ...f })),
         skipDuplicates: true,
       }),
+      // By id alone is fine from here on: the claim above already proved this
+      // batch belongs to this import and this user.
       prisma.importBatch.update({
         where: { id: batchId },
         data: { status: 'COMPLETED', completedAt: new Date() },

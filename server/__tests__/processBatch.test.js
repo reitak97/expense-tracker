@@ -11,7 +11,7 @@ jest.mock('../lib/prisma', () => ({
   prisma: {
     expense: { createMany: jest.fn() },
     importRowError: { createMany: jest.fn(), count: jest.fn() },
-    importBatch: { update: jest.fn(), groupBy: jest.fn() },
+    importBatch: { update: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn() },
     import: { update: jest.fn() },
     $transaction: jest.fn(),
   },
@@ -75,6 +75,8 @@ beforeEach(() => {
   prisma.importRowError.createMany.mockResolvedValue({ count: 0 })
   prisma.importRowError.count.mockResolvedValue(0)
   prisma.importBatch.update.mockResolvedValue({})
+  // The ownership claim matched one batch: ids agree and the import is theirs.
+  prisma.importBatch.updateMany.mockResolvedValue({ count: 1 })
   prisma.importBatch.groupBy.mockResolvedValue([{ status: 'COMPLETED', _count: { _all: 1 } }])
   prisma.import.update.mockResolvedValue({})
 
@@ -128,10 +130,60 @@ describe('processBatch happy path', () => {
   test('records the delivery count on the batch', async () => {
     await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 3 })
 
-    expect(prisma.importBatch.update).toHaveBeenCalledWith({
-      where: { id: 'batch_0' },
+    expect(prisma.importBatch.updateMany).toHaveBeenCalledWith({
+      where: { id: 'batch_0', importId: 'imp_1', import: { userId: ALICE } },
       data: expect.objectContaining({ status: 'PROCESSING', attempts: 3 }),
     })
+  })
+})
+
+// The producer builds importId, batchId, and userId from one authenticated
+// request, so they always agree. Nothing enforced that, though — the first
+// write matched on batch id alone, and a message pairing one user's id with
+// another's import would have written rows across the boundary. The claim below
+// is what turns that from an assumption into a checked precondition.
+describe('processBatch ownership', () => {
+  test('claims the batch on the whole chain, not the batch id alone', async () => {
+    await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
+
+    expect(prisma.importBatch.updateMany).toHaveBeenCalledWith({
+      where: { id: 'batch_0', importId: 'imp_1', import: { userId: ALICE } },
+      data: expect.objectContaining({ status: 'PROCESSING' }),
+    })
+  })
+
+  // Nothing matched the chain, so the message is rejected before it can write.
+  test('refuses a batch that does not belong to the payload"s user', async () => {
+    prisma.importBatch.updateMany.mockResolvedValue({ count: 0 })
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')], { userId: 'user_bob' }), {
+        receiveCount: 1,
+      })
+    ).rejects.toThrow(/does not belong/i)
+  })
+
+  test('writes nothing when the claim fails', async () => {
+    prisma.importBatch.updateMany.mockResolvedValue({ count: 0 })
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')], { userId: 'user_bob' }), {
+        receiveCount: 1,
+      })
+    ).rejects.toThrow()
+
+    expect(prisma.expense.createMany).not.toHaveBeenCalled()
+    expect(prisma.importRowError.createMany).not.toHaveBeenCalled()
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(prisma.import.update).not.toHaveBeenCalled()
+  })
+
+  // It also costs nothing: the claim is the same write that marks the batch
+  // PROCESSING, so verifying ownership adds no round trip.
+  test('does not spend an extra query on the check', async () => {
+    await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
+
+    expect(prisma.importBatch.updateMany).toHaveBeenCalledTimes(1)
   })
 })
 
@@ -407,7 +459,7 @@ describe('processBatch failure', () => {
   test('rejects a payload with no rows array without touching the database', async () => {
     await expect(processBatch({ importId: 'imp_1', batchId: 'batch_0', userId: ALICE })).rejects.toThrow()
 
-    expect(prisma.importBatch.update).not.toHaveBeenCalled()
+    expect(prisma.importBatch.updateMany).not.toHaveBeenCalled()
     expect(prisma.expense.createMany).not.toHaveBeenCalled()
   })
 

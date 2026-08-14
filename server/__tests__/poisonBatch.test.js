@@ -24,7 +24,7 @@ jest.mock('../lib/prisma', () => ({
   prisma: {
     expense: { createMany: jest.fn() },
     importRowError: { createMany: jest.fn(), count: jest.fn() },
-    importBatch: { update: jest.fn(), groupBy: jest.fn() },
+    importBatch: { update: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn() },
     import: { update: jest.fn() },
     merchantOverride: { findMany: jest.fn() },
     merchantCache: { findMany: jest.fn(), updateMany: jest.fn(), createMany: jest.fn() },
@@ -62,7 +62,8 @@ function goodBatch(overrides = {}) {
   }
 }
 
-// Statuses that actually committed, in order — see the lazy update mock below.
+// Terminal statuses that actually committed, in order — see the lazy update
+// mock below. PROCESSING is claimed through updateMany and does not appear here.
 let committedStatuses
 
 function batchStatuses() {
@@ -91,6 +92,7 @@ beforeEach(() => {
     },
   }))
 
+  prisma.importBatch.updateMany.mockResolvedValue({ count: 1 })
   prisma.importBatch.groupBy.mockResolvedValue([{ status: 'COMPLETED', _count: { _all: 1 } }])
   prisma.import.update.mockResolvedValue({})
 
@@ -191,7 +193,7 @@ describe('a structurally poison payload', () => {
     await pollOnce(processBatch)
 
     expect(deleteMessage).not.toHaveBeenCalled()
-    expect(prisma.importBatch.update).not.toHaveBeenCalled()
+    expect(prisma.importBatch.updateMany).not.toHaveBeenCalled()
     expect(prisma.expense.createMany).not.toHaveBeenCalled()
   })
 
@@ -236,6 +238,8 @@ describe('a batch that fails transiently, then succeeds', () => {
     await pollOnce(processBatch)
 
     expect(deleteMessage).toHaveBeenCalledTimes(1)
-    expect(batchStatuses()).toEqual(['PROCESSING', 'PROCESSING', 'COMPLETED'])
+    // Two claims, but only the second delivery reached a terminal status.
+    expect(prisma.importBatch.updateMany).toHaveBeenCalledTimes(2)
+    expect(batchStatuses()).toEqual(['COMPLETED'])
   })
 })
