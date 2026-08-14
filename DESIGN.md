@@ -102,6 +102,14 @@ Left to do, and all of it needs a console or credentials rather than code:
 - [ ] Apply `render.yaml` as a Render Blueprint and set the secrets it declares
 - [ ] CloudWatch alarm on the DLQ's `ApproximateNumberOfMessages` — a dead-letter queue
       nobody watches is a slower way to lose data
+
+Done since:
+
+- [x] Split the two database URLs. `DATABASE_URL` now points at the transaction pooler
+      (6543, `?pgbouncer=true`) and `DIRECT_URL` at the session pooler (5432) for the DDL
+      migrations run — the shape `.env.example` already documented, which the live `.env`
+      had drifted from by pointing both at 5432. Verified both paths: `prisma migrate
+      status` over the direct URL, and a live query over the pooled one.
 - [ ] Split the two database URLs. `DATABASE_URL` and `DIRECT_URL` are currently identical,
       both on the session pooler (5432). Runtime belongs on the transaction pooler (6543,
       `?pgbouncer=true`); only `DIRECT_URL` needs 5432, for the DDL that migrations run.
