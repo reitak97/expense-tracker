@@ -9,6 +9,7 @@ const { validateEnv } = require('./lib/env')
 validateEnv(['DATABASE_URL', 'ANTHROPIC_API_KEY', 'SQS_QUEUE_URL', 'AWS_REGION'])
 
 const { runPoller } = require('./worker/poller')
+const { processBatch } = require('./worker/processBatch')
 
 // Flipped by the signal handlers below. Checked before each poll, so shutdown
 // waits for the message in flight instead of abandoning it mid-write.
@@ -16,7 +17,7 @@ let running = true
 
 // Render sends SIGTERM on every deploy and restart. Draining rather than dying
 // means the batch in progress finishes; anything still queued is simply
-// redelivered to the next container.
+// redelivered to the next container. 
 for (const signal of ['SIGTERM', 'SIGINT']) {
   process.on(signal, () => {
     if (!running) {
@@ -29,13 +30,7 @@ for (const signal of ['SIGTERM', 'SIGINT']) {
   })
 }
 
-// Placeholder until batch processing lands. Throwing rather than returning
-// leaves the message on the queue, so nothing is lost in the meantime.
-async function handleBatch(payload) {
-  throw new Error(`Batch processing not implemented yet (batch ${payload.batchId})`)
-}
-
-runPoller(handleBatch, { shouldContinue: () => running })
+runPoller(processBatch, { shouldContinue: () => running })
   .then(() => {
     console.log('Worker: stopped')
     process.exit(0)

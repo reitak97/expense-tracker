@@ -86,6 +86,25 @@ describe('pollOnce', () => {
     expect(deleteMessage).not.toHaveBeenCalled()
   })
 
+  // `null` is valid JSON, so it survives the parse above and reaches the
+  // handler. Reporting the failure then had to name the batch, and reading an
+  // id off null threw out of a function that promises never to throw — taking
+  // the rest of the window with it and looping the poller on its backoff.
+  test('survives a message body of literal null', async () => {
+    const handler = jest.fn().mockRejectedValue(new Error('payload is missing importId'))
+    receiveMessages.mockResolvedValue([
+      { ReceiptHandle: 'rh_null', Body: 'null', Attributes: { ApproximateReceiveCount: '1' } },
+      sqsMessage(BATCH, { receiptHandle: 'rh_good' }),
+    ])
+    handler.mockRejectedValueOnce(new Error('payload is missing importId')).mockResolvedValue(undefined)
+
+    await expect(pollOnce(handler)).resolves.toBe(2)
+
+    // The healthy message behind it was still processed and deleted.
+    expect(deleteMessage).toHaveBeenCalledTimes(1)
+    expect(deleteMessage).toHaveBeenCalledWith('rh_good')
+  })
+
   // A poison batch must not take the other nine down with it.
   test('keeps processing the rest of the window after one message fails', async () => {
     const handler = jest

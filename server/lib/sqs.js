@@ -11,6 +11,12 @@ const {
 // SQS API limit, not a tuning knob.
 const MAX_SEND_BATCH = 10
 
+// Mirrors maxReceiveCount in the queue's redrive policy — SQS is what enforces
+// it. Kept here so the worker can recognize its last attempt and record why the
+// batch failed before the message moves to the DLQ. Change both together, with
+// scripts/configure-dlq.js.
+const MAX_RECEIVE_COUNT = 3
+
 // Built on first use, so this module imports fine without AWS config (e.g. in tests).
 let client = null
 
@@ -119,4 +125,5 @@ module.exports = {
   deleteMessage,
   extendVisibility,
   MAX_SEND_BATCH,
+  MAX_RECEIVE_COUNT,
 }
