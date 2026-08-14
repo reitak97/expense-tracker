@@ -81,26 +81,32 @@ session — a task list there goes stale silently.
 - [x] Client upload UI and progress (`ImportUpload.jsx`, `useImportProgress.js`)
 - [x] Deploy config for both services (`render.yaml`)
 
-Left to do, and all of it needs credentials or a console rather than code:
+- [x] `ImportBatch.error` migration applied — `prisma migrate status` reports all five
+      migrations in place
+- [x] DLQ attached and reconciled with the code. `expense-imports` (us-east-2) redrives
+      to `expense-imports-dlq` at `maxReceiveCount` **3**, matching `MAX_RECEIVE_COUNT` in
+      `lib/sqs.js`, with 14-day retention on the DLQ. The worker's last-delivery bookkeeping
+      therefore fires on the delivery the queue actually gives up on.
 
-- [ ] Reconcile the queue with the code. `expense-imports` (us-east-2) already has
-      `expense-imports-dlq` attached with 14-day retention — that part is done — but its
-      `maxReceiveCount` is **3** while `MAX_RECEIVE_COUNT` in `lib/sqs.js` is **5**, and
-      its visibility timeout is **60s**. The mismatch is live: the worker records why a
-      batch failed on delivery 5, so with the queue giving up at 3 that never runs and a
-      poison batch reaches the DLQ with its import stuck at `PROCESSING` and no reason
-      recorded. 60s is also short for a batch that makes an Anthropic call before it
-      writes anything — an overrun means duplicate LLM calls, and a batch can exhaust its
-      redeliveries while succeeding every time.
+Left to do, and all of it needs a console or credentials rather than code:
 
-      `node scripts/configure-dlq.js --apply` sets both, but the app's IAM user is
-      correctly scoped to runtime actions and has no `sqs:SetQueueAttributes`. Either
-      grant it temporarily, run the script under an admin profile, or set the two values
-      in the console.
-- [ ] `npx prisma migrate dev` for the new `ImportBatch.error` column
+- [ ] Raise the queue's visibility timeout from **60s** to **300s**. 60s is short for a
+      batch that makes an Anthropic call before it writes anything: an overrun means SQS
+      redelivers work that is still running, so duplicate LLM calls, and a batch can
+      exhaust its three redeliveries while succeeding every time.
+
+      `node scripts/configure-dlq.js --apply` sets it, but the app's IAM user is correctly
+      scoped to runtime actions and has no `sqs:SetQueueAttributes` — the apply fails there
+      and changes nothing. Either grant that action temporarily, run the script under an
+      admin profile, or set the value in the console.
 - [ ] Apply `render.yaml` as a Render Blueprint and set the secrets it declares
 - [ ] CloudWatch alarm on the DLQ's `ApproximateNumberOfMessages` — a dead-letter queue
       nobody watches is a slower way to lose data
+- [ ] Split the two database URLs. `DATABASE_URL` and `DIRECT_URL` are currently identical,
+      both on the session pooler (5432). Runtime belongs on the transaction pooler (6543,
+      `?pgbouncer=true`); only `DIRECT_URL` needs 5432, for the DDL that migrations run.
+      The worker holds a connection per batch across an LLM call and would be first to
+      exhaust the smaller pool.
 
 ## Key decisions
 
