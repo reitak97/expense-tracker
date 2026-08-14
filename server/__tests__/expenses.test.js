@@ -88,6 +88,9 @@ const { setOverride } = require('../lib/merchantCache')
 // override test below uses them to compute the exact value it expects.
 const { normalizeMerchant, hashMerchant } = require('../lib/normalize')
 
+// The vocabulary both the worker and this endpoint categorize against.
+const { CATEGORIES } = require('../lib/categories')
+
 // Two users, because most of what these tests check is that one can't touch
 // the other's data. ALICE owns expenseRow below; BOB is the outsider.
 const ALICE = 'user_alice'
@@ -331,6 +334,26 @@ describe('POST /expenses', () => {
     expect(prisma.expense.create).toHaveBeenCalledWith({
       data: expect.objectContaining({ category: 'Transport' }),
     })
+  })
+})
+
+// This endpoint and the worker categorize against the same vocabulary, but they
+// build their prompts separately. The list here used to be spelled out inline,
+// so adding a category to lib/categories.js left this one offering the old set
+// with nothing to catch it.
+describe('POST /expenses category vocabulary', () => {
+  test('offers the shared category list, not a copy of it', async () => {
+    mockUserId = ALICE
+    prisma.expense.create.mockResolvedValue(expenseRow)
+
+    await request(app)
+      .post('/expenses')
+      .send({ description: 'Coffee', amount: 650, date: '2026-06-18' })
+
+    const prompt = mockAnthropicCreate.mock.calls[0][0].messages[0].content
+    for (const category of CATEGORIES) {
+      expect(prompt).toContain(category)
+    }
   })
 })
 

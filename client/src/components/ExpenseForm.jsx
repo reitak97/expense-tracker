@@ -1,6 +1,18 @@
 import { useState } from 'react'
 
-const CATEGORIES = ['Food & Drink', 'Transport', 'Bills', 'Shopping', 'Health', 'Other']
+// Mirrors server/lib/categories.js. The two are separate packages with no
+// shared module, so this copy has to be updated alongside it — the server is
+// the source of truth, since it also constrains what the AI may return.
+const CATEGORIES = [
+  'Food & Drink',
+  'Transport',
+  'Travel',
+  'Bills',
+  'Subscriptions',
+  'Shopping',
+  'Health',
+  'Other',
+]
 
 // A "blank" form object we can reuse to reset the form after submit.
 const EMPTY_FORM = { description: '', amount: '', category: 'Food & Drink', date: '' }

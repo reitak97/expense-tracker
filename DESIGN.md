@@ -80,6 +80,8 @@ session — a task list there goes stale silently.
 - [x] Progress over WebSockets (`lib/ws.js`) and the `GET /imports/:id` fallback
 - [x] Client upload UI and progress (`ImportUpload.jsx`, `useImportProgress.js`)
 - [x] Deploy config for both services (`render.yaml`)
+- [x] Category vocabulary widened to eight after a real statement, plus coverage for
+      `worker/categorize.js`, which had none — see **Category vocabulary** below
 
 - [x] `ImportBatch.error` migration applied — `prisma migrate status` reports all five
       migrations in place
@@ -162,6 +164,38 @@ After `maxReceiveCount` redeliveries, a batch moves to the DLQ rather than loopi
 forever. This distinguishes transient failures (API timeout, worth retrying) from
 deterministic ones (malformed batch, retrying forever burns money). DLQ contents are
 inspectable and manually replayable.
+
+### Category vocabulary
+
+Eight categories: Food & Drink, Transport, Travel, Bills, Subscriptions, Shopping,
+Health, Other. The list lives in `lib/categories.js` and is the single source for both
+the worker's response schema and the single-expense endpoint's prompt.
+
+Travel and Subscriptions were added in response to a real 1000-row statement that put
+**396 rows in Other** — 40% of the file. Two causes, and neither was the model being
+wrong:
+
+1. **Nowhere to put them.** Hotels and flights had no category, so `marriott hotels`
+   and `delta air lines` were correctly declining to be Shopping.
+2. **The prompt said to.** It read *"when a merchant is unfamiliar or could plausibly be
+   several categories, use Other rather than guessing."* Against a broad vocabulary
+   almost every merchant is plausibly two things — Netflix is arguably Bills or
+   Shopping — so the clause fired on merchants the model clearly recognized. It now says
+   to use Other only when a merchant is genuinely unrecognizable or is not a purchase at
+   all, and defines the two new categories against their nearest neighbours (Subscriptions
+   vs Bills, Travel vs Transport).
+
+**Adding a category is not self-applying.** `MerchantCache` holds the answer from
+whenever a merchant was first seen, so a widened vocabulary changes nothing for the
+merchants already in it — `marriott hotels` would keep resolving to Other forever. The
+cache has to be cleared for the new categories to reach existing merchants; per-user
+`MerchantOverride` rows are unaffected and should not be touched, since those are
+corrections a user made deliberately.
+
+**Tradeoff:** more categories mean a busier pie chart and more borderline calls at the
+edges (`apple.com/bill` and `steam purchase` are genuinely arguable between
+Subscriptions and Shopping). Stopped at eight rather than splitting out Software,
+Groceries, and Transfers, which were considered and deferred.
 
 ### Merchant normalization and caching
 

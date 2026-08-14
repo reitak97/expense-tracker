@@ -9,6 +9,7 @@ const anthropic = new Anthropic()
 const { prisma } = require('../../lib/prisma')
 const { normalizeMerchant, hashMerchant } = require('../../lib/normalize')
 const { setOverride } = require('../../lib/merchantCache')
+const { CATEGORIES, DEFAULT_CATEGORY } = require('../../lib/categories')
 const { requireAuth } = require('../middleware/requireAuth')
 
 const router = express.Router()
@@ -50,12 +51,15 @@ router.post('/expenses', async (req, res) => {
   }
 
   // Fallback if the AI call fails below.
-  let aiCategory = category || 'Other'
+  let aiCategory = category || DEFAULT_CATEGORY
   try {
     const message = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 20,
-      messages: [{ role: 'user', content: 'Categorize this expense. Reply with ONLY one of these exact words: Food & Drink, Transport, Bills, Shopping, Health, Other. Expense: ' + description }]
+      // Built from the shared list rather than spelled out here. The two were
+      // separate copies, so adding a category to lib/categories.js would have
+      // left this endpoint offering the old vocabulary indefinitely.
+      messages: [{ role: 'user', content: `Categorize this expense. Reply with ONLY one of these exact words: ${CATEGORIES.join(', ')}. Expense: ` + description }]
     })
     aiCategory = message.content[0].text.trim()
   } catch (error) {
@@ -68,7 +72,7 @@ router.post('/expenses', async (req, res) => {
       data: {
         description,
         amount: Number(amount), // cents, per schema.prisma
-        category: aiCategory || 'Other',
+        category: aiCategory || DEFAULT_CATEGORY,
         date,
         userId: req.userId,
       },

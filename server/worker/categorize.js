@@ -45,8 +45,18 @@ const SYSTEM_PROMPT =
   'The names have already been normalized: store numbers, locations, and payment-processor ' +
   'prefixes are stripped, so "sq *starbucks 8823" arrives as "starbucks". ' +
   'Return one entry per merchant you are given, using the merchant name exactly as provided. ' +
-  'Categorize by what the business primarily sells. When a merchant is unfamiliar or could ' +
-  'plausibly be several categories, use Other rather than guessing.'
+  'Categorize by what the business primarily sells. ' +
+  'Subscriptions is for recurring services billed on a cycle — streaming, software, hosting, ' +
+  'cloud platforms. Bills is for household utilities and insurance. Travel is for hotels, ' +
+  'airlines, and trip booking, as distinct from Transport, which is local travel: rideshare, ' +
+  'fuel, parking, transit. ' +
+  // Narrowed deliberately. This previously also said to use Other when a
+  // merchant "could plausibly be several categories", which against a broad
+  // vocabulary is almost all of them — it put 40% of a real statement in Other,
+  // including merchants the model clearly recognized.
+  'Use Other only when the merchant is genuinely unrecognizable or is not a purchase at all, ' +
+  'such as a transfer between accounts. If a merchant fits a category by its primary ' +
+  'business, use that category rather than Other.'
 
 /**
  * Categorizes merchants the cache has never seen.
