@@ -184,6 +184,13 @@ async function processBatch(payload, { receiveCount = 1 } = {}) {
           // deliberately not rethrown — the original error is the useful one.
           console.error(`Worker: could not mark batch ${batchId} FAILED:`, updateError.message)
         })
+
+      // A batch that dies for good can be the last one outstanding. Settling
+      // the import here too is what stops the progress UI waiting on a batch
+      // that is on its way to the DLQ and never coming back.
+      await finalizeImport(importId).catch((finalizeError) => {
+        console.error(`Worker: could not settle import ${importId}:`, finalizeError.message)
+      })
     }
 
     throw error

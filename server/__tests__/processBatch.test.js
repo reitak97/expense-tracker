@@ -342,6 +342,66 @@ describe('processBatch failure', () => {
     })
   })
 
+  // A batch that dies for good can be the last one outstanding. If the import
+  // is not settled here it stays PROCESSING forever, and the progress UI waits
+  // on a batch that is already on its way to the DLQ.
+  test('settles the import when the last outstanding batch dies for good', async () => {
+    categorizeMerchants.mockRejectedValue(new Error('Anthropic 503'))
+    prisma.importBatch.groupBy.mockResolvedValue([{ status: 'FAILED', _count: { _all: 1 } }])
+    prisma.importRowError.count.mockResolvedValue(0)
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: MAX_RECEIVE_COUNT })
+    ).rejects.toThrow('Anthropic 503')
+
+    expect(prisma.import.update).toHaveBeenCalledWith({
+      where: { id: 'imp_1' },
+      data: expect.objectContaining({ status: 'FAILED' }),
+    })
+  })
+
+  test('completes the import when a failed batch was not the last one', async () => {
+    categorizeMerchants.mockRejectedValue(new Error('Anthropic 503'))
+    prisma.importBatch.groupBy.mockResolvedValue([
+      { status: 'COMPLETED', _count: { _all: 7 } },
+      { status: 'FAILED', _count: { _all: 1 } },
+    ])
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: MAX_RECEIVE_COUNT })
+    ).rejects.toThrow()
+
+    expect(prisma.import.update).toHaveBeenCalledWith({
+      where: { id: 'imp_1' },
+      data: expect.objectContaining({ status: 'COMPLETED' }),
+    })
+  })
+
+  test('leaves the import alone when batches are still outstanding', async () => {
+    categorizeMerchants.mockRejectedValue(new Error('Anthropic 503'))
+    prisma.importBatch.groupBy.mockResolvedValue([
+      { status: 'FAILED', _count: { _all: 1 } },
+      { status: 'PENDING', _count: { _all: 3 } },
+    ])
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: MAX_RECEIVE_COUNT })
+    ).rejects.toThrow()
+
+    expect(prisma.import.update).not.toHaveBeenCalled()
+  })
+
+  // The original error is the one worth reporting; a failure to tidy up after
+  // it must not replace it.
+  test('still rethrows the original error when settling the import fails', async () => {
+    categorizeMerchants.mockRejectedValue(new Error('Anthropic 503'))
+    prisma.importBatch.groupBy.mockRejectedValue(new Error('connection reset'))
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: MAX_RECEIVE_COUNT })
+    ).rejects.toThrow('Anthropic 503')
+  })
+
   // A payload this broken will never parse into work, so it should reach the
   // DLQ rather than be retried — but it must not write anything on the way.
   test('rejects a payload with no rows array without touching the database', async () => {
