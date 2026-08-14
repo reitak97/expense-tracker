@@ -91,11 +91,15 @@ session — a task list there goes stale silently.
 Left to do, and all of it needs a console or credentials rather than code:
 
 - [ ] Apply `render.yaml` as a Render Blueprint and set the secrets it declares
-- [ ] CloudWatch alarm on the DLQ's `ApproximateNumberOfMessages` — a dead-letter queue
-      nobody watches is a slower way to lose data
 
 Done since:
 
+- [x] CloudWatch alarm on the DLQ. Fires on `ApproximateNumberOfMessagesVisible > 0`
+      (Maximum over 5 minutes) for `expense-imports-dlq`, notifying an SNS topic. Maximum
+      rather than Sum, which would add repeated samples of the same sitting message and
+      read high. Created in the console — the app's IAM user has no `cloudwatch:*`, so
+      this cannot be verified from the repo; check the SNS subscription reads Confirmed
+      rather than PendingConfirmation, which is the way this silently does nothing.
 - [x] Queue visibility timeout raised to **300s** (set in the console; the app's IAM user
       is scoped to runtime actions and cannot write queue attributes). With
       `maxReceiveCount` at 3 that gives a batch ~15 minutes of retries, and a batch no
