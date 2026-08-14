@@ -1,0 +1,51 @@
+# Responds to @claude in an issue or PR comment.
+#
+# On demand rather than automatic: this one only runs when someone asks for it,
+# so it costs nothing until it is used. The companion workflow
+# (claude-review.yml) is the one that runs on its own.
+
+name: Claude
+
+on:
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  claude:
+    # Without this every comment on the repository would start a run. The
+    # review body is checked too, since a review can mention @claude in its
+    # summary rather than in a line comment.
+    if: >
+      contains(github.event.comment.body, '@claude') ||
+      contains(github.event.review.body, '@claude')
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      # write, so @claude can push a fix when asked to rather than only
+      # describing one.
+      contents: write
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: a shallow clone cannot diff a branch against main,
+          # which is most of what a review needs to see.
+          fetch-depth: 0
+
+      - uses: anthropics/claude-code-action@v1
+        with:
+          # Subscription auth, not an API key. Generated locally with
+          # `claude setup-token`, which mints a long-lived token against the
+          # Claude Pro/Max plan — so runs draw on plan usage rather than
+          # metered API credits. Swap to `anthropic_api_key` if this ever
+          # needs to outlive the subscription; the two are interchangeable
+          # here and setting both makes the API key win.
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
