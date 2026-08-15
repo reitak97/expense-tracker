@@ -211,10 +211,21 @@ choice and was not one, so it was removed rather than made to win. Letting it wi
 have disabled categorization for manual entry entirely, since the form always sent a
 value whether or not the user touched it.
 
-**Consequence, currently unaddressed:** `PATCH /expenses/:id` still honours an explicit
-category and is what feeds `MerchantOverride`, but nothing in the client calls it. So
-there is no way to correct a category from the UI, and the per-user override layer has
-no entry point for manually entered expenses. Editing an expense is the missing piece.
+Correction happens after the fact instead. The category badge in the list is a select,
+so changing one is a click on the thing that is wrong rather than a separate edit mode,
+and it goes through `PATCH /expenses/:id` — which honours an explicit category, unlike
+create. For an imported row that write also lands in `MerchantOverride`, so the
+correction applies to every future import of that merchant.
+
+Splitting it this way keeps each path's rule simple: create is automatic because the
+description is all there is to go on, and correction is manual because at that point a
+person is looking at a specific row and disagreeing with it.
+
+`PATCH` validates the category against `lib/categories.js` and returns 400 on anything
+else, rather than coercing to `Other` the way create does. The value came from a person,
+and it propagates into `MerchantOverride` where it decides that merchant's category for
+this user from then on — storing something other than what was asked for would be wrong
+in both directions.
 
 **Tradeoff:** more categories mean a busier pie chart and more borderline calls at the
 edges (`apple.com/bill` and `steam purchase` are genuinely arguable between

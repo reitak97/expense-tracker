@@ -102,6 +102,15 @@ router.patch('/expenses/:id', async (req, res) => {
     if (req.body[field] !== undefined) data[field] = req.body[field]
   })
 
+  // Rejected rather than coerced to Other, because unlike the create path this
+  // value came from a person, and quietly storing something else is worse than
+  // telling them no. It also propagates: a category set here is written to
+  // MerchantOverride, where it decides this user's imports for that merchant
+  // from then on.
+  if (data.category !== undefined && !CATEGORIES.includes(data.category)) {
+    return res.status(400).json({ error: 'Unknown category' })
+  }
+
   try {
     // id + userId together: someone else's row simply doesn't match.
     const expense = await prisma.expense.update({

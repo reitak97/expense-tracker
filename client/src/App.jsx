@@ -109,6 +109,28 @@ export default function App() {
     setExpenses([])
   }
 
+  // Corrects one expense's category. For an imported row the server also
+  // records the choice against the merchant, so the next import of it lands in
+  // the right place — that side effect is the reason this is worth having at
+  // all, beyond fixing the single row on screen.
+  async function changeCategory(id, category) {
+    const token = await getToken()
+    const response = await fetch(`${import.meta.env.VITE_API_URL}/expenses/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${token}` },
+      body: JSON.stringify({ category }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Could not change the category (${response.status}).`)
+    }
+
+    // Replaced with the row the server returned rather than the value posted,
+    // so what is displayed is what was actually stored.
+    const updated = await response.json()
+    setExpenses(expenses.map(e => (e.id === updated.id ? updated : e)))
+  }
+
   // Derived value — recalculated every render. No need to store this in state.
   const total = expenses.reduce((sum, e) => sum + e.amount, 0)
 
@@ -155,6 +177,7 @@ export default function App() {
               expenses={expenses}
               onDelete={deleteExpense}
               onDeleteAll={deleteAllExpenses}
+              onChangeCategory={changeCategory}
               total={total}
             />
             <ExpenseChart expenses={expenses} />

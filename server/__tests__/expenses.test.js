@@ -387,6 +387,51 @@ describe('POST /expenses category vocabulary', () => {
 
 })
 
+// The category on this route is now user-supplied from the list UI, and for an
+// imported row it propagates into MerchantOverride — where it decides that
+// merchant's category for this user on every future import. So an unknown value
+// has to be stopped here rather than stored and rendered as an unstyled badge.
+describe('PATCH /expenses/:id category validation', () => {
+  test('accepts a category in the vocabulary', async () => {
+    mockUserId = ALICE
+    prisma.expense.update.mockResolvedValue({ ...expenseRow, category: 'Travel' })
+
+    const res = await request(app).patch('/expenses/exp_1').send({ category: 'Travel' })
+
+    expect(res.status).toBe(200)
+    expect(prisma.expense.update.mock.calls[0][0].data.category).toBe('Travel')
+  })
+
+  test('rejects a category outside the vocabulary', async () => {
+    mockUserId = ALICE
+
+    const res = await request(app).patch('/expenses/exp_1').send({ category: 'Crypto' })
+
+    expect(res.status).toBe(400)
+  })
+
+  // Rejected before the write, not after — a 400 that still changed the row
+  // would be the worst of both.
+  test('an unknown category never reaches the database', async () => {
+    mockUserId = ALICE
+
+    await request(app).patch('/expenses/exp_1').send({ category: 'Crypto' })
+
+    expect(prisma.expense.update).not.toHaveBeenCalled()
+    expect(setOverride).not.toHaveBeenCalled()
+  })
+
+  // Every other field still has to work; the guard is scoped to category.
+  test('leaves a request without a category alone', async () => {
+    mockUserId = ALICE
+    prisma.expense.update.mockResolvedValue(expenseRow)
+
+    const res = await request(app).patch('/expenses/exp_1').send({ description: 'Latte' })
+
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('PATCH /expenses/:id', () => {
   test('scopes the update to the signed-in user', async () => {
     mockUserId = ALICE
