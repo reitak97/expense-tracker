@@ -50,7 +50,11 @@ router.post('/expenses', async (req, res) => {
     return res.status(400).json({ error: 'description, amount, and date are required' })
   }
 
-  // Fallback if the AI call fails below.
+  // The AI owns the category on create, so a `category` in the body is only
+  // the fallback for when the call below fails — it does not win when the call
+  // succeeds. The form stopped sending one for exactly that reason; it read as
+  // a choice that was silently overwritten. PATCH is where a category is
+  // chosen deliberately, and that one is honoured.
   let aiCategory = category || DEFAULT_CATEGORY
   try {
     const message = await anthropic.messages.create({

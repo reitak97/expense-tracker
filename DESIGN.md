@@ -196,6 +196,26 @@ cache has to be cleared for the new categories to reach existing merchants; per-
 `MerchantOverride` rows are unaffected and should not be touched, since those are
 corrections a user made deliberately.
 
+`node scripts/reset-merchant-cache.js` is that step — dry-run by default, `--apply` to
+delete. It clears the whole table rather than guessing which rows are stale, because a
+row does not record which vocabulary produced it; the cost is one LLM call per merchant
+on the next import, which refills the cache. Run it after any change to
+`lib/categories.js` or to the categorization prompt.
+
+### The AI owns the category on create
+
+`POST /expenses` categorizes from the description and ignores a category in the request
+body unless the call fails, in which case the body value is the fallback. The form used
+to send one from a dropdown, which the AI then overwrote — the control looked like a
+choice and was not one, so it was removed rather than made to win. Letting it win would
+have disabled categorization for manual entry entirely, since the form always sent a
+value whether or not the user touched it.
+
+**Consequence, currently unaddressed:** `PATCH /expenses/:id` still honours an explicit
+category and is what feeds `MerchantOverride`, but nothing in the client calls it. So
+there is no way to correct a category from the UI, and the per-user override layer has
+no entry point for manually entered expenses. Editing an expense is the missing piece.
+
 **Tradeoff:** more categories mean a busier pie chart and more borderline calls at the
 edges (`apple.com/bill` and `steam purchase` are genuinely arguable between
 Subscriptions and Shopping). Stopped at eight rather than splitting out Software,
