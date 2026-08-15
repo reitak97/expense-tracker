@@ -105,8 +105,12 @@ async function finalizeImport(importId) {
 
   // FAILED only when nothing landed. One dead batch out of eight is a partial
   // import the user can still use, with a failed count explaining the gap.
-  await prisma.import.update({
-    where: { id: importId },
+  //
+  // updateMany with a status filter, so a cancelled import is not rewritten as
+  // COMPLETED by whichever in-flight batch happens to finish last. The user's
+  // decision outranks the worker's bookkeeping.
+  await prisma.import.updateMany({
+    where: { id: importId, status: { in: ['PENDING', 'PROCESSING'] } },
     data: {
       status: (byStatus.FAILED || 0) === total ? 'FAILED' : 'COMPLETED',
       failedRows,
@@ -138,10 +142,36 @@ async function processBatch(payload, { receiveCount = 1 } = {}) {
   // by this user. The producer builds all three from one authenticated request,
   // so they always agree today — this is what keeps that an enforced invariant
   // rather than an assumed one, and it costs no extra round trip.
+  //
+  // status PENDING is part of the claim for the same reason: a batch the user
+  // cancelled is CANCELLED, so it fails to match and never starts. Cancelling
+  // cannot remove the message from SQS, so this is where a cancelled batch
+  // actually stops.
   const claimed = await prisma.importBatch.updateMany({
-    where: { id: batchId, importId, import: { userId } },
+    where: { id: batchId, importId, import: { userId }, status: { in: ['PENDING', 'PROCESSING'] } },
     data: { status: 'PROCESSING', attempts: receiveCount, startedAt: new Date() },
   })
+
+  // Nothing claimed has two very different causes, and they need opposite
+  // handling: a batch that has already settled is finished business and its
+  // message should be deleted, while ids that don't belong together are a real
+  // fault that belongs in the DLQ. Only queried on the miss, so the happy path
+  // is still one round trip.
+  if (claimed.count === 0) {
+    const batch = await prisma.importBatch.findFirst({
+      where: { id: batchId, importId, import: { userId } },
+      select: { status: true },
+    })
+
+    // Returning rather than throwing is what deletes the message. Covers a
+    // cancelled batch, and also a redelivery of one that already finished —
+    // reprocessing that would be a no-op thanks to the row-level idempotency
+    // key, so there is nothing to gain by doing the work again.
+    if (batch && batch.status !== 'PENDING' && batch.status !== 'PROCESSING') {
+      console.log(`Worker: batch ${batchId} is already ${batch.status}; dropping its message`)
+      return { settled: batch.status, imported: 0, failed: 0 }
+    }
+  }
 
   // Nothing matched: the ids don't belong together, or the import is gone.
   // Either way this message can never do meaningful work, so it fails here

@@ -27,8 +27,39 @@ export default function ImportUpload({ onImported }) {
   // creating a second copy of every row.
   const idempotencyKey = useRef(null)
 
+  const [cancelling, setCancelling] = useState(false)
+  const [cancelError, setCancelError] = useState(null)
+
   const { progress, transport, error: progressError } = useImportProgress(importId)
-  const settled = progress?.status === 'COMPLETED' || progress?.status === 'FAILED'
+  const settled =
+    progress?.status === 'COMPLETED' ||
+    progress?.status === 'FAILED' ||
+    progress?.status === 'CANCELLED'
+
+  // Stops an import that is queued or running. The queue messages still get
+  // delivered — SQS cannot un-send one — but the worker drops them once the
+  // batches are marked, so this is a real stop rather than just a label.
+  async function cancelImport() {
+    setCancelling(true)
+    setCancelError(null)
+    try {
+      const token = await getToken()
+      const response = await fetch(`${API_URL}/imports/${importId}/cancel`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${token}` },
+      })
+
+      // 409 means it finished while the click was in flight, which is not a
+      // failure worth an error message — the next progress frame says so.
+      if (!response.ok && response.status !== 409) {
+        throw new Error(`Could not cancel the import (${response.status}).`)
+      }
+    } catch (err) {
+      setCancelError(err.message || 'Could not cancel the import.')
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   // The imported rows are ordinary expenses once they land, so the list above
   // has to refetch. Runs on the transition into a settled state, not on
@@ -137,6 +168,9 @@ export default function ImportUpload({ onImported }) {
           error={progressError}
           settled={settled}
           onDone={reset}
+          onCancel={cancelImport}
+          cancelling={cancelling}
+          cancelError={cancelError}
         />
       )}
     </div>
@@ -145,11 +179,34 @@ export default function ImportUpload({ onImported }) {
 
 // The live half: a bar while the worker chews through batches, a summary once
 // it stops.
-function ImportStatus({ progress, transport, error, settled, onDone }) {
+function ImportStatus({
+  progress,
+  transport,
+  error,
+  settled,
+  onDone,
+  onCancel,
+  cancelling,
+  cancelError,
+}) {
   // Between the upload returning and the first frame arriving there is nothing
-  // to render a bar from yet.
+  // to render a bar from yet. The import is already queued at this point, so
+  // cancelling has to be reachable here too — this is exactly the state a stuck
+  // import sits in when no worker is running.
   if (!progress) {
-    return <p className="mt-2 text-sm text-gray-500">Queued. Waiting for the first update…</p>
+    return (
+      <div className="mt-2 flex items-center justify-between gap-4">
+        <p className="text-sm text-gray-500">Queued. Waiting for the first update…</p>
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={cancelling}
+          className="text-sm font-medium text-gray-500 hover:text-red-600 disabled:opacity-50 cursor-pointer"
+        >
+          {cancelling ? 'Cancelling…' : 'Cancel'}
+        </button>
+      </div>
+    )
   }
 
   // Both come from the server. Rows rejected individually carry a reason;
@@ -169,20 +226,47 @@ function ImportStatus({ progress, transport, error, settled, onDone }) {
       <div className="w-full h-2 bg-gray-100 rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-500 ${
-            progress.status === 'FAILED' ? 'bg-red-500' : 'bg-indigo-600'
+            progress.status === 'FAILED'
+              ? 'bg-red-500'
+              : progress.status === 'CANCELLED'
+                ? 'bg-gray-400'
+                : 'bg-indigo-600'
           }`}
           style={{ width: `${progress.percentComplete}%` }}
         />
       </div>
 
-      <p className="mt-2 text-sm text-gray-500">
-        {progress.batches.settled} of {progress.batches.total} batches
-        {progress.batches.failed > 0 && (
-          <span className="text-amber-600"> · {progress.batches.failed} failed</span>
+      <div className="mt-2 flex items-baseline justify-between gap-4">
+        <p className="text-sm text-gray-500">
+          {progress.batches.settled} of {progress.batches.total} batches
+          {progress.batches.failed > 0 && (
+            <span className="text-amber-600"> · {progress.batches.failed} failed</span>
+          )}
+          {progress.batches.cancelled > 0 && (
+            <span className="text-gray-400"> · {progress.batches.cancelled} cancelled</span>
+          )}
+          {/* Worth surfacing: it explains why updates feel slower than usual. */}
+          {transport === 'polling' && <span className="text-gray-400"> · reconnecting</span>}
+        </p>
+
+        {/* Only while there is something to stop. */}
+        {!settled && (
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={cancelling}
+            className="shrink-0 text-sm font-medium text-gray-500 hover:text-red-600 disabled:opacity-50 cursor-pointer"
+          >
+            {cancelling ? 'Cancelling…' : 'Cancel'}
+          </button>
         )}
-        {/* Worth surfacing: it explains why updates feel slower than usual. */}
-        {transport === 'polling' && <span className="text-gray-400"> · reconnecting</span>}
-      </p>
+      </div>
+
+      {cancelError && (
+        <p role="alert" className="mt-2 text-sm text-red-600">
+          {cancelError}
+        </p>
+      )}
 
       {settled && (
         <div className="mt-4 pt-4 border-t border-gray-100">
@@ -197,6 +281,21 @@ function ImportStatus({ progress, transport, error, settled, onDone }) {
                 <span className="text-amber-600">
                   {' '}
                   {unprocessedRows} rows were in a batch that failed and can be re-uploaded.
+                </span>
+              )}
+            </p>
+          ) : progress.status === 'CANCELLED' ? (
+            // Not an error, so it does not get the red treatment. Rows that had
+            // already been written are kept — they are real expenses — and the
+            // count is what makes that obvious rather than surprising.
+            <p className="text-sm text-gray-700">
+              Import cancelled. <span className="font-medium">{importedRows}</span> of{' '}
+              {progress.totalRows} rows had already been imported and were kept.
+              {unprocessedRows > 0 && (
+                <span className="text-gray-500">
+                  {' '}
+                  The remaining {unprocessedRows} were not processed. Re-uploading the same file is
+                  safe — the rows already imported will not be duplicated.
                 </span>
               )}
             </p>

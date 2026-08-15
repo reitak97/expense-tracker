@@ -24,8 +24,8 @@ jest.mock('../lib/prisma', () => ({
   prisma: {
     expense: { createMany: jest.fn() },
     importRowError: { createMany: jest.fn(), count: jest.fn() },
-    importBatch: { update: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn() },
-    import: { update: jest.fn() },
+    importBatch: { update: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findFirst: jest.fn() },
+    import: { update: jest.fn(), updateMany: jest.fn() },
     merchantOverride: { findMany: jest.fn() },
     merchantCache: { findMany: jest.fn(), updateMany: jest.fn(), createMany: jest.fn() },
     $transaction: jest.fn(),
