@@ -355,6 +355,35 @@ describe('POST /expenses category vocabulary', () => {
       expect(prompt).toContain(category)
     }
   })
+
+  // Asking in prose is not a constraint. The worker gets an enum-constrained
+  // schema; this endpoint gets whatever the model felt like replying, so the
+  // answer has to be checked before it reaches a column the UI renders from.
+  test('stores an answer that is in the vocabulary', async () => {
+    mockUserId = ALICE
+    mockAnthropicCreate.mockResolvedValue({ content: [{ text: 'Subscriptions' }] })
+    prisma.expense.create.mockResolvedValue(expenseRow)
+
+    await request(app)
+      .post('/expenses')
+      .send({ description: 'Netflix', amount: 1599, date: '2026-06-18' })
+
+    expect(prisma.expense.create.mock.calls[0][0].data.category).toBe('Subscriptions')
+  })
+
+  test('falls back when the model answers outside the vocabulary', async () => {
+    mockUserId = ALICE
+    // Singular, and the kind of near-miss that gets more likely as the list grows.
+    mockAnthropicCreate.mockResolvedValue({ content: [{ text: 'Subscription' }] })
+    prisma.expense.create.mockResolvedValue(expenseRow)
+
+    await request(app)
+      .post('/expenses')
+      .send({ description: 'Netflix', amount: 1599, date: '2026-06-18' })
+
+    expect(prisma.expense.create.mock.calls[0][0].data.category).toBe('Other')
+  })
+
 })
 
 describe('PATCH /expenses/:id', () => {

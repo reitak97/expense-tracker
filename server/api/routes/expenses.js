@@ -61,7 +61,12 @@ router.post('/expenses', async (req, res) => {
       // left this endpoint offering the old vocabulary indefinitely.
       messages: [{ role: 'user', content: `Categorize this expense. Reply with ONLY one of these exact words: ${CATEGORIES.join(', ')}. Expense: ` + description }]
     })
-    aiCategory = message.content[0].text.trim()
+    const answer = message.content[0].text.trim()
+    // Checked against the list rather than trusted. The worker constrains its
+    // answers with a response schema; this endpoint asks in prose, so nothing
+    // stops "Subscription" or "Travel." coming back and being stored as a
+    // category no part of the UI knows how to render.
+    aiCategory = CATEGORIES.includes(answer) ? answer : DEFAULT_CATEGORY
   } catch (error) {
     // Logged, not rethrown: a bad category shouldn't lose the expense.
     console.error('Error from Anthropic API:', error)
