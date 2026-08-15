@@ -85,6 +85,11 @@ export default function App() {
 
   // Clears every expense this user has. The server scopes the delete by user,
   // so this can only ever affect the signed-in account.
+  //
+  // Throws rather than returning quietly, unlike the single-row delete above:
+  // the caller closes its confirmation prompt as soon as this resolves, so a
+  // silent return would look exactly like success on the one action that
+  // cannot be undone.
   async function deleteAllExpenses() {
     const token = await getToken()
     const response = await fetch(`${import.meta.env.VITE_API_URL}/expenses`, {
@@ -92,9 +97,12 @@ export default function App() {
       headers: { 'Authorization': `Bearer ${token}` },
     })
 
+    // Safe to promise nothing was removed: the server's only failure path is
+    // deleteMany itself throwing, and that is one statement — it does not
+    // partially delete. A network error is different and says less, so it is
+    // left to surface its own message.
     if (!response.ok) {
-      console.error('Failed to delete expenses')
-      return
+      throw new Error(`Could not delete your expenses (${response.status}). Nothing was removed.`)
     }
     // Emptied locally rather than refetched — the server just confirmed there
     // is nothing left to fetch.

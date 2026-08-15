@@ -129,8 +129,11 @@ router.patch('/expenses/:id', async (req, res) => {
 
 // DELETE /expenses — remove every expense this user has
 //
-// Declared before the /:id route for readability only; Express matches the
-// literal path first either way. deleteMany rather than a loop: one statement,
+// Declared before the /:id route for readability only. Order does not matter
+// here because the two patterns are disjoint — `/expenses/exp_1` cannot match
+// the bare path. Express matches in registration order, not literal-first, so
+// a future `/expenses/summary` next to `/expenses/:id` would need the specific
+// one declared first. deleteMany rather than a loop: one statement,
 // and the userId filter is the whole safety story — without it this clears the
 // table for everyone.
 router.delete('/expenses', async (req, res) => {

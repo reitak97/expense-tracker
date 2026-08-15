@@ -22,15 +22,27 @@ export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) 
   // button; nothing is sent until the second.
   const [confirming, setConfirming] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState(null)
 
   async function confirmDeleteAll() {
     setDeleting(true)
+    setError(null)
     try {
       await onDeleteAll()
       setConfirming(false)
+    } catch (err) {
+      // Stays armed and reports why. Closing the prompt is this component's
+      // only signal that the delete happened, so it must not close on one
+      // that didn't.
+      setError(err.message || 'Could not delete your expenses.')
     } finally {
       setDeleting(false)
     }
+  }
+
+  function cancelDeleteAll() {
+    setConfirming(false)
+    setError(null)
   }
 
   // Early return — show an empty state instead of an empty list
@@ -63,7 +75,7 @@ export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) 
               {deleting ? 'Deleting…' : 'Delete'}
             </button>
             <button
-              onClick={() => setConfirming(false)}
+              onClick={cancelDeleteAll}
               disabled={deleting}
               className="text-sm font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
             >
@@ -76,7 +88,10 @@ export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) 
               {expenses.length} item{expenses.length !== 1 ? 's' : ''}
             </span>
             <button
-              onClick={() => setConfirming(true)}
+              onClick={() => {
+                setError(null)
+                setConfirming(true)
+              }}
               className="text-sm font-medium text-gray-400 hover:text-red-600 transition-colors cursor-pointer"
             >
               Delete all
@@ -84,6 +99,17 @@ export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) 
           </div>
         )}
       </div>
+
+      {/* Only rendered after a failed delete. A destructive action that does
+          nothing has to say so — the list looking unchanged is ambiguous. */}
+      {error && (
+        <div
+          role="alert"
+          className="px-6 py-3 bg-red-50 border-b border-red-100 text-sm text-red-700"
+        >
+          {error}
+        </div>
+      )}
 
       {/* Expense rows */}
       <ul>

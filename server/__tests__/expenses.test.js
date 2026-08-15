@@ -521,7 +521,7 @@ describe('DELETE /expenses', () => {
     expect(where.userId).toBe(ALICE)
   })
 
-  test('deletes only the requesting user"s rows', async () => {
+  test("deletes only the requesting user's rows", async () => {
     mockUserId = BOB
     prisma.expense.deleteMany.mockResolvedValue({ count: 3 })
 
