@@ -254,6 +254,29 @@ Dates are accepted as `YYYY-MM-DD` or `MM/DD/YYYY` and rejected otherwise. Anyth
 permissive has to guess at `03/04`, and silently importing a wrong date is worse than
 telling the user which row we could not read.
 
+### No automated PR review in CI
+
+Tried and reverted. `anthropics/claude-code-action` was wired up on both an `@claude`
+mention trigger and an automatic on-open review, authenticated with a subscription
+token from `claude setup-token` so runs would draw on plan usage rather than metered
+API credits.
+
+The action never completed a single model call: every run failed at turn one after
+~2s with `is_error: true` and `$0.00` cost, twice reproducibly, with the error text
+redacted from the logs. This matches an open upstream bug where the token is passed
+correctly but arrives null inside the SDK
+([#1281](https://github.com/anthropics/claude-code-action/issues/1281), and its
+linked duplicates #1126, #676, #1201). No fix, and regenerating the token does not
+help.
+
+`ANTHROPIC_API_KEY` is the known-working path, so this is a billing choice rather
+than a technical dead end. Rejected for now because the value of an automatic review
+on a solo project does not justify a second metered account, and the same review is
+available on demand from an editor session at no extra cost.
+
+**Revisit if:** the upstream issue closes, or the repo gains contributors, at which
+point review-on-open stops being redundant with the session that wrote the code.
+
 ## Data model (relevant tables)
 
 | Table | Purpose | Notable constraints |
