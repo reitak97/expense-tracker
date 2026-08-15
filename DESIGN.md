@@ -80,6 +80,8 @@ session — a task list there goes stale silently.
 - [x] Progress over WebSockets (`lib/ws.js`) and the `GET /imports/:id` fallback
 - [x] Client upload UI and progress (`ImportUpload.jsx`, `useImportProgress.js`)
 - [x] Deploy config for both services (`render.yaml`)
+- [x] Category vocabulary widened to eight after a real statement, plus coverage for
+      `worker/categorize.js`, which had none — see **Category vocabulary** below
 
 - [x] `ImportBatch.error` migration applied — `prisma migrate status` reports all five
       migrations in place
@@ -90,23 +92,27 @@ session — a task list there goes stale silently.
 
 Left to do, and all of it needs a console or credentials rather than code:
 
-- [ ] Raise the queue's visibility timeout from **60s** to **300s**. 60s is short for a
-      batch that makes an Anthropic call before it writes anything: an overrun means SQS
-      redelivers work that is still running, so duplicate LLM calls, and a batch can
-      exhaust its three redeliveries while succeeding every time.
-
-      `node scripts/configure-dlq.js --apply` sets it, but the app's IAM user is correctly
-      scoped to runtime actions and has no `sqs:SetQueueAttributes` — the apply fails there
-      and changes nothing. Either grant that action temporarily, run the script under an
-      admin profile, or set the value in the console.
 - [ ] Apply `render.yaml` as a Render Blueprint and set the secrets it declares
-- [ ] CloudWatch alarm on the DLQ's `ApproximateNumberOfMessages` — a dead-letter queue
-      nobody watches is a slower way to lose data
-- [ ] Split the two database URLs. `DATABASE_URL` and `DIRECT_URL` are currently identical,
-      both on the session pooler (5432). Runtime belongs on the transaction pooler (6543,
-      `?pgbouncer=true`); only `DIRECT_URL` needs 5432, for the DDL that migrations run.
-      The worker holds a connection per batch across an LLM call and would be first to
-      exhaust the smaller pool.
+
+Done since:
+
+- [x] CloudWatch alarm on the DLQ. Fires on `ApproximateNumberOfMessagesVisible > 0`
+      (Maximum over 5 minutes) for `expense-imports-dlq`, notifying an SNS topic. Maximum
+      rather than Sum, which would add repeated samples of the same sitting message and
+      read high. Created in the console — the app's IAM user has no `cloudwatch:*`, so
+      this cannot be verified from the repo; check the SNS subscription reads Confirmed
+      rather than PendingConfirmation, which is the way this silently does nothing.
+- [x] Queue visibility timeout raised to **300s** (set in the console; the app's IAM user
+      is scoped to runtime actions and cannot write queue attributes). With
+      `maxReceiveCount` at 3 that gives a batch ~15 minutes of retries, and a batch no
+      longer risks redelivery while its Anthropic call is still in flight. Verified with
+      `node scripts/configure-dlq.js`, which now reports no drift between the queue and
+      `lib/sqs.js`.
+- [x] Split the two database URLs. `DATABASE_URL` now points at the transaction pooler
+      (6543, `?pgbouncer=true`) and `DIRECT_URL` at the session pooler (5432) for the DDL
+      migrations run — the shape `.env.example` already documented, which the live `.env`
+      had drifted from by pointing both at 5432. Verified both paths: `prisma migrate
+      status` over the direct URL, and a live query over the pooled one.
 
 ## Key decisions
 
@@ -162,6 +168,38 @@ After `maxReceiveCount` redeliveries, a batch moves to the DLQ rather than loopi
 forever. This distinguishes transient failures (API timeout, worth retrying) from
 deterministic ones (malformed batch, retrying forever burns money). DLQ contents are
 inspectable and manually replayable.
+
+### Category vocabulary
+
+Eight categories: Food & Drink, Transport, Travel, Bills, Subscriptions, Shopping,
+Health, Other. The list lives in `lib/categories.js` and is the single source for both
+the worker's response schema and the single-expense endpoint's prompt.
+
+Travel and Subscriptions were added in response to a real 1000-row statement that put
+**396 rows in Other** — 40% of the file. Two causes, and neither was the model being
+wrong:
+
+1. **Nowhere to put them.** Hotels and flights had no category, so `marriott hotels`
+   and `delta air lines` were correctly declining to be Shopping.
+2. **The prompt said to.** It read *"when a merchant is unfamiliar or could plausibly be
+   several categories, use Other rather than guessing."* Against a broad vocabulary
+   almost every merchant is plausibly two things — Netflix is arguably Bills or
+   Shopping — so the clause fired on merchants the model clearly recognized. It now says
+   to use Other only when a merchant is genuinely unrecognizable or is not a purchase at
+   all, and defines the two new categories against their nearest neighbours (Subscriptions
+   vs Bills, Travel vs Transport).
+
+**Adding a category is not self-applying.** `MerchantCache` holds the answer from
+whenever a merchant was first seen, so a widened vocabulary changes nothing for the
+merchants already in it — `marriott hotels` would keep resolving to Other forever. The
+cache has to be cleared for the new categories to reach existing merchants; per-user
+`MerchantOverride` rows are unaffected and should not be touched, since those are
+corrections a user made deliberately.
+
+**Tradeoff:** more categories mean a busier pie chart and more borderline calls at the
+edges (`apple.com/bill` and `steam purchase` are genuinely arguable between
+Subscriptions and Shopping). Stopped at eight rather than splitting out Software,
+Groceries, and Transfers, which were considered and deferred.
 
 ### Merchant normalization and caching
 

@@ -4,12 +4,14 @@ import { useState } from 'react'
 // ?? is the "nullish coalescing" operator — falls back to the gray style
 // if a category isn't in this map (e.g. a future category we haven't added yet).
 const CATEGORY_COLORS = {
-  'Food & Drink': 'bg-orange-100 text-orange-700',
-  'Transport':    'bg-blue-100 text-blue-700',
-  'Bills':        'bg-red-100 text-red-700',
-  'Shopping':     'bg-pink-100 text-pink-700',
-  'Health':       'bg-green-100 text-green-700',
-  'Other':        'bg-gray-100 text-gray-700',
+  'Food & Drink':  'bg-orange-100 text-orange-700',
+  'Transport':     'bg-blue-100 text-blue-700',
+  'Travel':        'bg-sky-100 text-sky-700',
+  'Bills':         'bg-red-100 text-red-700',
+  'Subscriptions': 'bg-violet-100 text-violet-700',
+  'Shopping':      'bg-pink-100 text-pink-700',
+  'Health':        'bg-green-100 text-green-700',
+  'Other':         'bg-gray-100 text-gray-700',
 }
 
 // Converts cents back to a display string. 650 → "6.50"
