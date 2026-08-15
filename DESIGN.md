@@ -250,6 +250,27 @@ lever in the system.
 **Tradeoff:** over-aggressive normalization collides distinct merchants. Rules are
 conservative and the cache is invalidatable per key.
 
+**Order ids glued on with no space were missed for a while.** `GRUBHUB*6427` and
+`AMAZON.COM*QSGWL0059` arrive as one token, not two, so the store-number scan — which
+worked token by token — never saw a boundary to cut at. Every order became its own
+normalized name: its own cache row, its own LLM call, and a merchant fragmented across
+enough distinct spellings that a single miscategorized order couldn't be told from a
+genuine disagreement about the merchant. A dump of the live cache showed 97 of 184
+entries were exactly this — the same handful of DoorDash, Grubhub, and Amazon accounts,
+counted as though each order were a different business.
+
+Fixed by checking each token for a mid-token `*` and dropping everything after it when
+the remainder carries a digit — `A*B HARDWARE` keeps its `*` because `B` does not, which
+is what stops this from over-merging the way the tradeoff above warns about. The same
+widening applies to the existing store-number scan: it used to require a token be *only*
+digits, which missed alphanumeric codes (`MCDONALDS F8300`) and phone numbers
+(`HULU 877-8244858`) that were digits mixed with letters or punctuation.
+
+Fixing the function does not fix data already in `MerchantCache` — those 97 rows keep
+their fragmented names and their (often wrong) cached category until the cache is
+cleared. `scripts/reset-merchant-cache.js` is the same tool the category-vocabulary
+change uses for the same reason: a cache hit never reaches the corrected code.
+
 ### Progress over WebSockets
 
 The client cannot poll cheaply for a job that takes minutes. The worker updates batch

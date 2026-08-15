@@ -31,6 +31,43 @@ describe('normalizeMerchant', () => {
     })
   })
 
+  // A processor-style '*' that a bank glues onto the merchant with no space,
+  // e.g. "GRUBHUB*6427" arriving as one token rather than two. Before this,
+  // each order became its own normalized name — its own cache row and its own
+  // LLM call — because the order id had nowhere to be recognized as noise.
+  // Found from a real cache dump where 97 of 184 entries were exactly this.
+  describe('order ids glued to the merchant with an asterisk', () => {
+    test.each([
+      ['GRUBHUB*6427', 'grubhub'],
+      ['GRUBHUB*2444', 'grubhub'],
+      ['DOORDASH*9818', 'doordash'],
+      ['AMAZON.COM*QSGWL0059', 'amazon.com'],
+    ])('collapses %s to %s', (raw, expected) => {
+      expect(normalizeMerchant(raw)).toBe(expected)
+    })
+
+    // Two different orders from the same merchant must land on the same
+    // normalized name, or the cache gains a row per order instead of per
+    // merchant — the exact failure this fix targets.
+    test('two different order ids from the same merchant collapse to one name', () => {
+      expect(normalizeMerchant('GRUBHUB*6427')).toBe(normalizeMerchant('GRUBHUB*2444'))
+    })
+
+    // The suffix can be a mix of letters and digits, not just digits — bank
+    // order codes commonly are. Digit-containing is what marks it as noise
+    // rather than part of the name, same rule as the store-number case below.
+    test('strips an alphanumeric suffix, not only a numeric one', () => {
+      expect(normalizeMerchant('AMZN MKTP US*3KNEUV2FC')).toBe('amzn mktp us')
+    })
+
+    // A suffix with no digit at all reads as part of the name rather than a
+    // generated id, so it survives — the existing "A*B HARDWARE" behavior
+    // this fix has to preserve.
+    test('leaves a glued suffix alone when it carries no digit', () => {
+      expect(normalizeMerchant('SOMETHING*ELSE')).toBe('something*else')
+    })
+  })
+
   describe('store numbers and trailing location', () => {
     // The main rule, and why the Starbucks case works.
     test('drops everything from the store number onward', () => {
@@ -60,6 +97,17 @@ describe('normalizeMerchant', () => {
 
     test('strips a trailing US state code', () => {
       expect(normalizeMerchant('WHOLE FOODS MKT WA')).toBe('whole foods mkt')
+    })
+
+    // Not just a bare digit run — a store code or a phone number is
+    // alphanumeric, and used to survive because the old check required the
+    // whole token to be digits.
+    test('drops a trailing alphanumeric store code', () => {
+      expect(normalizeMerchant('MCDONALDS F8300')).toBe('mcdonalds')
+    })
+
+    test('drops a trailing phone number', () => {
+      expect(normalizeMerchant('HULU 877-8244858')).toBe('hulu')
     })
 
     // "GO" is not a state; stripping it would be an over-merge.

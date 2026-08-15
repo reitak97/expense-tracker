@@ -16,6 +16,19 @@ const STATE_CODES = new Set([
   'DC',
 ])
 
+// Drops an order-id-style suffix a bank glued onto a token with no space,
+// e.g. "GRUBHUB*6427" or "AMAZON.COM*QSGWL0059" arriving as one token each.
+// Only when the suffix carries a digit — an all-letters suffix ("A*B") reads
+// as part of the name rather than a generated id, and is left alone. Leading
+// '*' ("*4471") is a different case, handled by the store-number scan below.
+function stripGluedSuffix(token) {
+  const starIndex = token.indexOf('*')
+  if (starIndex <= 0) return token
+
+  const suffix = token.slice(starIndex + 1)
+  return /\d/.test(suffix) ? token.slice(0, starIndex) : token
+}
+
 /**
  * Reduces a raw bank descriptor to a stable, comparable merchant name.
  *
@@ -30,13 +43,15 @@ function normalizeMerchant(raw) {
 
   s = s.replace(PROCESSOR_PREFIX, '')
 
-  let tokens = s.split(/\s+/).filter(Boolean)
+  let tokens = s.split(/\s+/).filter(Boolean).map(stripGluedSuffix)
 
-  // Everything from the store number onward is store/location noise.
-  // A leading '#' or '*' marks one anywhere; bare digits only from index 1,
-  // so brands like "76 GAS STATION" survive.
+  // Everything from the store number onward is store/location noise. A
+  // leading '#' or '*' marks one anywhere. From index 1, any token carrying a
+  // digit does too — not just a bare digit run, so an alphanumeric order code
+  // ("F8300") or a phone number ("877-8244858") is caught along with a plain
+  // store number, while "76 GAS STATION" survives because index 0 is exempt.
   const storeNumberAt = tokens.findIndex(
-    (token, i) => /^[#*]/.test(token) || (i > 0 && /^\d+$/.test(token))
+    (token, i) => /^[#*]/.test(token) || (i > 0 && /\d/.test(token))
   )
   if (storeNumberAt !== -1) {
     tokens = tokens.slice(0, storeNumberAt)
