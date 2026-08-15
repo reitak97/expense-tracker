@@ -196,6 +196,37 @@ cache has to be cleared for the new categories to reach existing merchants; per-
 `MerchantOverride` rows are unaffected and should not be touched, since those are
 corrections a user made deliberately.
 
+`node scripts/reset-merchant-cache.js` is that step — dry-run by default, `--apply` to
+delete. It clears the whole table rather than guessing which rows are stale, because a
+row does not record which vocabulary produced it; the cost is one LLM call per merchant
+on the next import, which refills the cache. Run it after any change to
+`lib/categories.js` or to the categorization prompt.
+
+### The AI owns the category on create
+
+`POST /expenses` categorizes from the description and ignores a category in the request
+body unless the call fails, in which case the body value is the fallback. The form used
+to send one from a dropdown, which the AI then overwrote — the control looked like a
+choice and was not one, so it was removed rather than made to win. Letting it win would
+have disabled categorization for manual entry entirely, since the form always sent a
+value whether or not the user touched it.
+
+Correction happens after the fact instead. The category badge in the list is a select,
+so changing one is a click on the thing that is wrong rather than a separate edit mode,
+and it goes through `PATCH /expenses/:id` — which honours an explicit category, unlike
+create. For an imported row that write also lands in `MerchantOverride`, so the
+correction applies to every future import of that merchant.
+
+Splitting it this way keeps each path's rule simple: create is automatic because the
+description is all there is to go on, and correction is manual because at that point a
+person is looking at a specific row and disagreeing with it.
+
+`PATCH` validates the category against `lib/categories.js` and returns 400 on anything
+else, rather than coercing to `Other` the way create does. The value came from a person,
+and it propagates into `MerchantOverride` where it decides that merchant's category for
+this user from then on — storing something other than what was asked for would be wrong
+in both directions.
+
 **Tradeoff:** more categories mean a busier pie chart and more borderline calls at the
 edges (`apple.com/bill` and `steam purchase` are genuinely arguable between
 Subscriptions and Shopping). Stopped at eight rather than splitting out Software,

@@ -19,7 +19,7 @@ function formatCents(cents) {
   return (cents / 100).toFixed(2)
 }
 
-export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) {
+export default function ExpenseList({ expenses, onDelete, onDeleteAll, onChangeCategory, total }) {
   // Two-step, because this one is not undoable. The first click only arms the
   // button; nothing is sent until the second.
   const [confirming, setConfirming] = useState(false)
@@ -45,6 +45,23 @@ export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) 
   function cancelDeleteAll() {
     setConfirming(false)
     setError(null)
+  }
+
+  // Which row is mid-save, so only that one select is disabled rather than all
+  // of them. Same error banner as the delete path: a correction that silently
+  // failed would show the old category back with no explanation.
+  const [savingId, setSavingId] = useState(null)
+
+  async function changeCategory(id, category) {
+    setSavingId(id)
+    setError(null)
+    try {
+      await onChangeCategory(id, category)
+    } catch (err) {
+      setError(err.message || 'Could not change the category.')
+    } finally {
+      setSavingId(null)
+    }
   }
 
   // Early return — show an empty state instead of an empty list
@@ -132,10 +149,26 @@ export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) 
               <p className="text-xs text-gray-400 mt-0.5">{expense.date}</p>
             </div>
 
-            {/* Category badge */}
-            <span className={`text-xs font-medium px-2 py-1 rounded-full ${CATEGORY_COLORS[expense.category] ?? 'bg-gray-100 text-gray-700'}`}>
-              {expense.category}
-            </span>
+            {/* The badge is the control. A select styled to look like the old
+                static badge, so correcting a category is one click on the
+                thing that is wrong rather than a separate edit mode. For an
+                imported row the server also remembers the correction, and the
+                next import of that merchant uses it. */}
+            <select
+              value={expense.category}
+              onChange={(e) => changeCategory(expense.id, e.target.value)}
+              disabled={savingId === expense.id}
+              aria-label={`Category for ${expense.description}`}
+              className={`text-xs font-medium pl-2 pr-6 py-1 rounded-full appearance-none cursor-pointer disabled:opacity-50 focus:outline-none focus:ring-2 focus:ring-indigo-500 ${CATEGORY_COLORS[expense.category] ?? 'bg-gray-100 text-gray-700'}`}
+            >
+              {/* Keyed off the colour map rather than a second copy of the
+                  list — a category with no colour has no badge to render. */}
+              {Object.keys(CATEGORY_COLORS).map((category) => (
+                <option key={category} value={category}>
+                  {category}
+                </option>
+              ))}
+            </select>
 
             {/* Amount */}
             <span className="text-sm font-semibold text-gray-900 w-16 text-right">

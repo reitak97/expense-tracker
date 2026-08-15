@@ -1,21 +1,10 @@
 import { useState } from 'react'
 
-// Mirrors server/lib/categories.js. The two are separate packages with no
-// shared module, so this copy has to be updated alongside it — the server is
-// the source of truth, since it also constrains what the AI may return.
-const CATEGORIES = [
-  'Food & Drink',
-  'Transport',
-  'Travel',
-  'Bills',
-  'Subscriptions',
-  'Shopping',
-  'Health',
-  'Other',
-]
-
-// A "blank" form object we can reuse to reset the form after submit.
-const EMPTY_FORM = { description: '', amount: '', category: 'Food & Drink', date: '' }
+// No category field. The server categorizes from the description, and it used
+// to overwrite whatever was picked here anyway — the dropdown looked like a
+// choice and was not one. Sending nothing makes that honest, and drops the
+// copy of the category list this file used to keep in sync by hand.
+const EMPTY_FORM = { description: '', amount: '', date: '' }
 
 // `onAdd` is a function passed down from App.jsx.
 // When the form submits we call it with the new expense data.
@@ -38,7 +27,6 @@ export default function ExpenseForm({ onAdd }) {
     onAdd({
       description: form.description.trim(),
       amount: Math.round(parseFloat(form.amount) * 100), // $6.50 → 650 cents
-      category: form.category,
       date: form.date,
     })
 
@@ -90,20 +78,11 @@ export default function ExpenseForm({ onAdd }) {
           />
         </div>
 
-        <div className="col-span-2">
-          <label className="block text-sm font-medium text-gray-700 mb-1">Category</label>
-          <select
-            name="category"
-            value={form.category}
-            onChange={handleChange}
-            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          >
-            {CATEGORIES.map(cat => (
-              <option key={cat} value={cat}>{cat}</option>
-            ))}
-          </select>
-        </div>
       </div>
+
+      <p className="mt-3 text-xs text-gray-400">
+        The category is assigned automatically from the description.
+      </p>
 
       <button
         type="submit"

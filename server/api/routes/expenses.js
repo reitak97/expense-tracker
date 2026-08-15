@@ -50,7 +50,11 @@ router.post('/expenses', async (req, res) => {
     return res.status(400).json({ error: 'description, amount, and date are required' })
   }
 
-  // Fallback if the AI call fails below.
+  // The AI owns the category on create, so a `category` in the body is only
+  // the fallback for when the call below fails — it does not win when the call
+  // succeeds. The form stopped sending one for exactly that reason; it read as
+  // a choice that was silently overwritten. PATCH is where a category is
+  // chosen deliberately, and that one is honoured.
   let aiCategory = category || DEFAULT_CATEGORY
   try {
     const message = await anthropic.messages.create({
@@ -97,6 +101,15 @@ router.patch('/expenses/:id', async (req, res) => {
     // undefined, not falsy — an amount of 0 is a legitimate value.
     if (req.body[field] !== undefined) data[field] = req.body[field]
   })
+
+  // Rejected rather than coerced to Other, because unlike the create path this
+  // value came from a person, and quietly storing something else is worse than
+  // telling them no. It also propagates: a category set here is written to
+  // MerchantOverride, where it decides this user's imports for that merchant
+  // from then on.
+  if (data.category !== undefined && !CATEGORIES.includes(data.category)) {
+    return res.status(400).json({ error: 'Unknown category' })
+  }
 
   try {
     // id + userId together: someone else's row simply doesn't match.
