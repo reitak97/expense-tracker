@@ -43,6 +43,7 @@ jest.mock('../lib/prisma', () => ({
       findMany: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      deleteMany: jest.fn(),
       delete: jest.fn(),
     },
   },
@@ -87,6 +88,9 @@ const { setOverride } = require('../lib/merchantCache')
 // Not mocked — normalizeMerchant/hashMerchant are pure functions, and the
 // override test below uses them to compute the exact value it expects.
 const { normalizeMerchant, hashMerchant } = require('../lib/normalize')
+
+// The vocabulary both the worker and this endpoint categorize against.
+const { CATEGORIES } = require('../lib/categories')
 
 // Two users, because most of what these tests check is that one can't touch
 // the other's data. ALICE owns expenseRow below; BOB is the outsider.
@@ -334,6 +338,55 @@ describe('POST /expenses', () => {
   })
 })
 
+// This endpoint and the worker categorize against the same vocabulary, but they
+// build their prompts separately. The list here used to be spelled out inline,
+// so adding a category to lib/categories.js left this one offering the old set
+// with nothing to catch it.
+describe('POST /expenses category vocabulary', () => {
+  test('offers the shared category list, not a copy of it', async () => {
+    mockUserId = ALICE
+    prisma.expense.create.mockResolvedValue(expenseRow)
+
+    await request(app)
+      .post('/expenses')
+      .send({ description: 'Coffee', amount: 650, date: '2026-06-18' })
+
+    const prompt = mockAnthropicCreate.mock.calls[0][0].messages[0].content
+    for (const category of CATEGORIES) {
+      expect(prompt).toContain(category)
+    }
+  })
+
+  // Asking in prose is not a constraint. The worker gets an enum-constrained
+  // schema; this endpoint gets whatever the model felt like replying, so the
+  // answer has to be checked before it reaches a column the UI renders from.
+  test('stores an answer that is in the vocabulary', async () => {
+    mockUserId = ALICE
+    mockAnthropicCreate.mockResolvedValue({ content: [{ text: 'Subscriptions' }] })
+    prisma.expense.create.mockResolvedValue(expenseRow)
+
+    await request(app)
+      .post('/expenses')
+      .send({ description: 'Netflix', amount: 1599, date: '2026-06-18' })
+
+    expect(prisma.expense.create.mock.calls[0][0].data.category).toBe('Subscriptions')
+  })
+
+  test('falls back when the model answers outside the vocabulary', async () => {
+    mockUserId = ALICE
+    // Singular, and the kind of near-miss that gets more likely as the list grows.
+    mockAnthropicCreate.mockResolvedValue({ content: [{ text: 'Subscription' }] })
+    prisma.expense.create.mockResolvedValue(expenseRow)
+
+    await request(app)
+      .post('/expenses')
+      .send({ description: 'Netflix', amount: 1599, date: '2026-06-18' })
+
+    expect(prisma.expense.create.mock.calls[0][0].data.category).toBe('Other')
+  })
+
+})
+
 describe('PATCH /expenses/:id', () => {
   test('scopes the update to the signed-in user', async () => {
     mockUserId = ALICE
@@ -474,6 +527,101 @@ describe('PATCH /expenses/:id', () => {
 
     expect(res.status).toBe(404)
     expect(res.body).toEqual({ error: 'Expense not found' })
+  })
+})
+
+// The one route that can destroy a user's whole dataset in a single call, so
+// the scoping assertions matter more here than anywhere else in this file: a
+// deleteMany that loses its where clause clears the table for every user, and
+// nothing about the response would look different.
+describe('DELETE /expenses', () => {
+  test('returns 401 with no token', async () => {
+    mockUserId = null
+
+    const res = await request(app).delete('/expenses')
+
+    expect(res.status).toBe(401)
+  })
+
+  test('an unauthenticated request never reaches the database', async () => {
+    mockUserId = null
+
+    await request(app).delete('/expenses')
+
+    expect(prisma.expense.deleteMany).not.toHaveBeenCalled()
+  })
+
+  test('scopes the delete to the signed-in user', async () => {
+    mockUserId = ALICE
+    prisma.expense.deleteMany.mockResolvedValue({ count: 12 })
+
+    await request(app).delete('/expenses')
+
+    expect(prisma.expense.deleteMany).toHaveBeenCalledWith({ where: { userId: ALICE } })
+  })
+
+  // The filter is the entire safety mechanism, so assert it exactly rather than
+  // with objectContaining — an extra or missing key here is the bug.
+  test('never issues an unfiltered delete', async () => {
+    mockUserId = ALICE
+    prisma.expense.deleteMany.mockResolvedValue({ count: 0 })
+
+    await request(app).delete('/expenses')
+
+    const where = prisma.expense.deleteMany.mock.calls[0][0].where
+    expect(Object.keys(where)).toEqual(['userId'])
+    expect(where.userId).toBe(ALICE)
+  })
+
+  test("deletes only the requesting user's rows", async () => {
+    mockUserId = BOB
+    prisma.expense.deleteMany.mockResolvedValue({ count: 3 })
+
+    await request(app).delete('/expenses')
+
+    expect(prisma.expense.deleteMany).toHaveBeenCalledWith({ where: { userId: BOB } })
+  })
+
+  // The count is what the UI reports back, so it has to be the real one.
+  test('reports how many rows were removed', async () => {
+    mockUserId = ALICE
+    prisma.expense.deleteMany.mockResolvedValue({ count: 1000 })
+
+    const res = await request(app).delete('/expenses')
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ deleted: 1000 })
+  })
+
+  test('reports zero when there was nothing to delete', async () => {
+    mockUserId = ALICE
+    prisma.expense.deleteMany.mockResolvedValue({ count: 0 })
+
+    const res = await request(app).delete('/expenses')
+
+    expect(res.status).toBe(200)
+    expect(res.body).toEqual({ deleted: 0 })
+  })
+
+  test('returns 500 when the delete fails', async () => {
+    mockUserId = ALICE
+    prisma.expense.deleteMany.mockRejectedValue(new Error('connection reset'))
+
+    const res = await request(app).delete('/expenses')
+
+    expect(res.status).toBe(500)
+  })
+
+  // Both routes exist; the bulk one must not swallow a request meant for a
+  // single id, or deleting one row would wipe the account.
+  test('does not intercept a delete aimed at one expense', async () => {
+    mockUserId = ALICE
+    prisma.expense.delete.mockResolvedValue(expenseRow)
+
+    await request(app).delete('/expenses/exp_1')
+
+    expect(prisma.expense.deleteMany).not.toHaveBeenCalled()
+    expect(prisma.expense.delete).toHaveBeenCalled()
   })
 })
 

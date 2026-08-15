@@ -9,6 +9,7 @@ const anthropic = new Anthropic()
 const { prisma } = require('../../lib/prisma')
 const { normalizeMerchant, hashMerchant } = require('../../lib/normalize')
 const { setOverride } = require('../../lib/merchantCache')
+const { CATEGORIES, DEFAULT_CATEGORY } = require('../../lib/categories')
 const { requireAuth } = require('../middleware/requireAuth')
 
 const router = express.Router()
@@ -50,14 +51,22 @@ router.post('/expenses', async (req, res) => {
   }
 
   // Fallback if the AI call fails below.
-  let aiCategory = category || 'Other'
+  let aiCategory = category || DEFAULT_CATEGORY
   try {
     const message = await anthropic.messages.create({
       model: 'claude-haiku-4-5-20251001',
       max_tokens: 20,
-      messages: [{ role: 'user', content: 'Categorize this expense. Reply with ONLY one of these exact words: Food & Drink, Transport, Bills, Shopping, Health, Other. Expense: ' + description }]
+      // Built from the shared list rather than spelled out here. The two were
+      // separate copies, so adding a category to lib/categories.js would have
+      // left this endpoint offering the old vocabulary indefinitely.
+      messages: [{ role: 'user', content: `Categorize this expense. Reply with ONLY one of these exact words: ${CATEGORIES.join(', ')}. Expense: ` + description }]
     })
-    aiCategory = message.content[0].text.trim()
+    const answer = message.content[0].text.trim()
+    // Checked against the list rather than trusted. The worker constrains its
+    // answers with a response schema; this endpoint asks in prose, so nothing
+    // stops "Subscription" or "Travel." coming back and being stored as a
+    // category no part of the UI knows how to render.
+    aiCategory = CATEGORIES.includes(answer) ? answer : DEFAULT_CATEGORY
   } catch (error) {
     // Logged, not rethrown: a bad category shouldn't lose the expense.
     console.error('Error from Anthropic API:', error)
@@ -68,7 +77,7 @@ router.post('/expenses', async (req, res) => {
       data: {
         description,
         amount: Number(amount), // cents, per schema.prisma
-        category: aiCategory || 'Other',
+        category: aiCategory || DEFAULT_CATEGORY,
         date,
         userId: req.userId,
       },
@@ -124,6 +133,28 @@ router.patch('/expenses/:id', async (req, res) => {
       return res.status(404).json({ error: 'Expense not found' })
     }
     res.status(500).json({ error: 'Failed to update expense' })
+  }
+})
+
+// DELETE /expenses — remove every expense this user has
+//
+// Declared before the /:id route for readability only. Order does not matter
+// here because the two patterns are disjoint — `/expenses/exp_1` cannot match
+// the bare path. Express matches in registration order, not literal-first, so
+// a future `/expenses/summary` next to `/expenses/:id` would need the specific
+// one declared first. deleteMany rather than a loop: one statement,
+// and the userId filter is the whole safety story — without it this clears the
+// table for everyone.
+router.delete('/expenses', async (req, res) => {
+  try {
+    const { count } = await prisma.expense.deleteMany({ where: { userId: req.userId } })
+
+    // Import rows are left alone. They are a record of what was uploaded and
+    // when, which stays true even after the expenses are gone.
+    res.json({ deleted: count })
+  } catch (error) {
+    console.error('DELETE /expenses error:', error)
+    res.status(500).json({ error: 'Failed to delete expenses' })
   }
 })
 
