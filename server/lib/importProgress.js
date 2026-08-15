@@ -37,12 +37,14 @@ async function getImportProgress(userId, importId) {
   const total = record.batches.length
   const outstanding = record.batches.filter((b) => OUTSTANDING.includes(b.status)).length
   const failed = record.batches.filter((b) => b.status === 'FAILED').length
+  const cancelled = record.batches.filter((b) => b.status === 'CANCELLED').length
 
-  // Rows in batches that died as a unit. They are not counted in failedRows:
-  // that comes from ImportRowError, and a batch that never finished wrote none.
-  // Without this the UI reports every row it didn't reject as imported.
+  // Rows in batches that never wrote anything — died as a unit, or were stopped
+  // before they started. They are not counted in failedRows: that comes from
+  // ImportRowError, and a batch that never finished wrote none. Without this the
+  // UI reports every row it didn't reject as imported.
   const unprocessedRows = record.batches
-    .filter((b) => b.status === 'FAILED')
+    .filter((b) => b.status === 'FAILED' || b.status === 'CANCELLED')
     .reduce((sum, b) => sum + b.rowCount, 0)
 
   return {
@@ -61,6 +63,7 @@ async function getImportProgress(userId, importId) {
       total,
       settled: total - outstanding,
       failed,
+      cancelled,
     },
     // Batches, not rows: the worker reports progress a batch at a time, so a
     // row-based percentage would sit still and then jump.
@@ -74,7 +77,15 @@ async function getImportProgress(userId, importId) {
  * @param {{status: string}} progress
  */
 function isSettled(progress) {
-  return progress.status === 'COMPLETED' || progress.status === 'FAILED'
+  return (
+    progress.status === 'COMPLETED' ||
+    progress.status === 'FAILED' ||
+    // A cancelled import can still have a PROCESSING batch finishing, so this
+    // deliberately does not wait for the batches to agree. The user asked it to
+    // stop; the socket should close rather than keep reporting a total that is
+    // no longer going to be reached.
+    progress.status === 'CANCELLED'
+  )
 }
 
 module.exports = { getImportProgress, isSettled }

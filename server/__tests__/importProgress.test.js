@@ -43,7 +43,7 @@ describe('getImportProgress', () => {
 
     const progress = await getImportProgress(ALICE, 'imp_1')
 
-    expect(progress.batches).toEqual({ total: 4, settled: 2, failed: 0 })
+    expect(progress.batches).toEqual({ total: 4, settled: 2, failed: 0, cancelled: 0 })
     expect(progress.percentComplete).toBe(50)
   })
 
@@ -54,7 +54,7 @@ describe('getImportProgress', () => {
 
     const progress = await getImportProgress(ALICE, 'imp_1')
 
-    expect(progress.batches).toEqual({ total: 2, settled: 2, failed: 1 })
+    expect(progress.batches).toEqual({ total: 2, settled: 2, failed: 1, cancelled: 0 })
     expect(progress.percentComplete).toBe(100)
   })
 

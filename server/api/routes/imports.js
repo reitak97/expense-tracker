@@ -242,4 +242,49 @@ router.get('/imports/:id', async (req, res) => {
   }
 })
 
+// POST /imports/:id/cancel — stop an import that is still running.
+//
+// SQS has no way to delete a specific message, so this cannot un-queue the work.
+// It marks the batches instead, and the worker drops a message whose batch is
+// CANCELLED. That is the whole mechanism: the messages still arrive, they just
+// stop meaning anything.
+//
+// PROCESSING batches are left alone deliberately. One is already mid-flight with
+// rows possibly half-written, and racing the worker for that row would trade a
+// clean stop for a corrupt one. It finishes, and the import settles after.
+router.post('/imports/:id/cancel', async (req, res) => {
+  try {
+    // Scoped by userId in the same statement, so another user's import simply
+    // does not match rather than being found and then rejected.
+    const stopped = await prisma.import.updateMany({
+      where: {
+        id: req.params.id,
+        userId: req.userId,
+        // Already settled means there is nothing to stop. Cancelling a finished
+        // import would rewrite a true outcome with a false one.
+        status: { in: ['PENDING', 'PROCESSING'] },
+      },
+      data: { status: 'CANCELLED', completedAt: new Date() },
+    })
+
+    if (stopped.count === 0) {
+      // Either it isn't theirs, doesn't exist, or has already finished. Asking
+      // again distinguishes the last case, which deserves a different answer.
+      const existing = await getImportProgress(req.userId, req.params.id)
+      if (!existing) return res.status(404).json({ error: 'Import not found' })
+      return res.status(409).json({ error: `Import has already ${existing.status.toLowerCase()}`, progress: existing })
+    }
+
+    await prisma.importBatch.updateMany({
+      where: { importId: req.params.id, status: 'PENDING' },
+      data: { status: 'CANCELLED', completedAt: new Date() },
+    })
+
+    res.json(await getImportProgress(req.userId, req.params.id))
+  } catch (error) {
+    console.error('POST /imports/:id/cancel error:', error)
+    res.status(500).json({ error: 'Failed to cancel the import' })
+  }
+})
+
 module.exports = { importsRouter: router, BATCH_SIZE }

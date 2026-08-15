@@ -26,6 +26,7 @@ jest.mock('../lib/prisma', () => ({
       findFirst: jest.fn(),
       create: jest.fn(),
       update: jest.fn(),
+      updateMany: jest.fn(),
     },
     importBatch: {
       updateMany: jest.fn(),
@@ -424,7 +425,7 @@ describe('GET /imports/:id', () => {
     const res = await request(app).get('/imports/imp_1')
 
     expect(res.status).toBe(200)
-    expect(res.body.batches).toEqual({ total: 4, settled: 3, failed: 1 })
+    expect(res.body.batches).toEqual({ total: 4, settled: 3, failed: 1, cancelled: 0 })
     expect(res.body.percentComplete).toBe(75)
   })
 
@@ -489,6 +490,114 @@ describe('GET /imports/:id', () => {
     prisma.import.findFirst.mockRejectedValue(new Error('connection reset'))
 
     const res = await request(app).get('/imports/imp_1')
+
+    expect(res.status).toBe(500)
+  })
+})
+
+// Cancelling cannot un-queue anything: SQS has no delete-by-id. What this
+// endpoint does is mark the rows so the worker drops the messages when they
+// arrive, which makes the status write the entire mechanism rather than
+// bookkeeping alongside it.
+describe('POST /imports/:id/cancel', () => {
+  function progressRow(overrides = {}) {
+    return {
+      id: 'imp_1',
+      filename: 'statement.csv',
+      status: 'CANCELLED',
+      totalRows: 300,
+      failedRows: 0,
+      createdAt: new Date('2026-06-18T00:00:00Z'),
+      completedAt: new Date('2026-06-18T00:01:00Z'),
+      batches: [{ status: 'COMPLETED', rowCount: 100 }, { status: 'CANCELLED', rowCount: 100 }],
+      ...overrides,
+    }
+  }
+
+  beforeEach(() => {
+    mockUserId = ALICE
+    prisma.import.updateMany.mockResolvedValue({ count: 1 })
+    prisma.importBatch.updateMany.mockResolvedValue({ count: 1 })
+    prisma.import.findFirst.mockResolvedValue(progressRow())
+  })
+
+  test('returns 401 with no token', async () => {
+    mockUserId = null
+
+    const res = await request(app).post('/imports/imp_1/cancel')
+
+    expect(res.status).toBe(401)
+    expect(prisma.import.updateMany).not.toHaveBeenCalled()
+  })
+
+  // The whole guard. Without userId in the where clause, anyone holding an id
+  // could stop anyone else's import.
+  test('scopes the cancel to the signed-in user', async () => {
+    mockUserId = BOB
+
+    await request(app).post('/imports/imp_1/cancel')
+
+    expect(prisma.import.updateMany.mock.calls[0][0].where).toMatchObject({
+      id: 'imp_1',
+      userId: BOB,
+    })
+  })
+
+  test('only cancels an import that is still running', async () => {
+    await request(app).post('/imports/imp_1/cancel')
+
+    // A settled import must not match: rewriting COMPLETED as CANCELLED would
+    // replace a true outcome with a false one.
+    expect(prisma.import.updateMany.mock.calls[0][0].where.status).toEqual({
+      in: ['PENDING', 'PROCESSING'],
+    })
+  })
+
+  // PROCESSING batches are deliberately left alone — one is mid-flight and may
+  // have written rows already.
+  test('cancels only the batches that had not started', async () => {
+    await request(app).post('/imports/imp_1/cancel')
+
+    expect(prisma.importBatch.updateMany).toHaveBeenCalledWith({
+      where: { importId: 'imp_1', status: 'PENDING' },
+      data: { status: 'CANCELLED', completedAt: expect.any(Date) },
+    })
+  })
+
+  test('returns the progress after cancelling', async () => {
+    const res = await request(app).post('/imports/imp_1/cancel')
+
+    expect(res.status).toBe(200)
+    expect(res.body.status).toBe('CANCELLED')
+    expect(res.body.batches).toEqual({ total: 2, settled: 2, failed: 0, cancelled: 1 })
+  })
+
+  test('404s for an import that is not theirs', async () => {
+    prisma.import.updateMany.mockResolvedValue({ count: 0 })
+    prisma.import.findFirst.mockResolvedValue(null)
+
+    const res = await request(app).post('/imports/imp_1/cancel')
+
+    expect(res.status).toBe(404)
+    expect(prisma.importBatch.updateMany).not.toHaveBeenCalled()
+  })
+
+  // Distinct from 404 on purpose: the import exists and the caller owns it,
+  // there is just nothing left to stop.
+  test('409s for an import that already finished', async () => {
+    prisma.import.updateMany.mockResolvedValue({ count: 0 })
+    prisma.import.findFirst.mockResolvedValue(progressRow({ status: 'COMPLETED' }))
+
+    const res = await request(app).post('/imports/imp_1/cancel')
+
+    expect(res.status).toBe(409)
+    expect(prisma.importBatch.updateMany).not.toHaveBeenCalled()
+  })
+
+  test('500s when the write fails', async () => {
+    prisma.import.updateMany.mockRejectedValue(new Error('connection reset'))
+
+    const res = await request(app).post('/imports/imp_1/cancel')
 
     expect(res.status).toBe(500)
   })

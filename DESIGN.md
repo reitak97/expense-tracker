@@ -169,6 +169,32 @@ forever. This distinguishes transient failures (API timeout, worth retrying) fro
 deterministic ones (malformed batch, retrying forever burns money). DLQ contents are
 inspectable and manually replayable.
 
+### Cancelling an import
+
+SQS has no delete-by-id, so cancelling cannot un-queue anything. Every batch of a
+cancelled import is still delivered; what changes is that the batch row is `CANCELLED`,
+the worker's claim only matches `PENDING`/`PROCESSING`, and a miss that turns out to be
+an already-settled batch returns instead of throwing — which is what deletes the message.
+The database row is the entire mechanism, not bookkeeping alongside it.
+
+Returning rather than throwing matters more than it looks. Throwing would redeliver a
+batch that can never do anything three times over and then park it in the DLQ, turning a
+deliberate stop into an operational alert. The same path also drops a redelivery of a
+batch that already completed, which was previously reprocessed as a no-op.
+
+**In-flight batches are not cancelled.** A `PROCESSING` batch may have rows half-written,
+and racing the worker for them would trade a clean stop for a corrupt one. It finishes,
+and the import settles after. `finalizeImport` uses `updateMany` with a status filter so
+that last batch cannot rewrite the user's `CANCELLED` as `COMPLETED` — the user's decision
+outranks the worker's bookkeeping.
+
+Rows already imported are kept. They are real expenses, and the row-level idempotency key
+means re-uploading the same file afterwards resumes rather than duplicates.
+
+`CANCELLED` counts as settled for progress, so the socket closes rather than reporting a
+total that will never be reached, and cancelled batches count toward `unprocessedRows` so
+the imported count stays honest.
+
 ### Category vocabulary
 
 Eight categories: Food & Drink, Transport, Travel, Bills, Subscriptions, Shopping,

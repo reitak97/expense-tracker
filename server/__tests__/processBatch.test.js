@@ -11,8 +11,8 @@ jest.mock('../lib/prisma', () => ({
   prisma: {
     expense: { createMany: jest.fn() },
     importRowError: { createMany: jest.fn(), count: jest.fn() },
-    importBatch: { update: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn() },
-    import: { update: jest.fn() },
+    importBatch: { update: jest.fn(), updateMany: jest.fn(), groupBy: jest.fn(), findFirst: jest.fn() },
+    import: { update: jest.fn(), updateMany: jest.fn() },
     $transaction: jest.fn(),
   },
 }))
@@ -78,7 +78,7 @@ beforeEach(() => {
   // The ownership claim matched one batch: ids agree and the import is theirs.
   prisma.importBatch.updateMany.mockResolvedValue({ count: 1 })
   prisma.importBatch.groupBy.mockResolvedValue([{ status: 'COMPLETED', _count: { _all: 1 } }])
-  prisma.import.update.mockResolvedValue({})
+  prisma.import.updateMany.mockResolvedValue({})
 
   // The real client runs the array as one transaction; here the operations have
   // already been issued by the mocks, so awaiting them is equivalent.
@@ -131,7 +131,7 @@ describe('processBatch happy path', () => {
     await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 3 })
 
     expect(prisma.importBatch.updateMany).toHaveBeenCalledWith({
-      where: { id: 'batch_0', importId: 'imp_1', import: { userId: ALICE } },
+      where: { id: 'batch_0', importId: 'imp_1', import: { userId: ALICE }, status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ status: 'PROCESSING', attempts: 3 }),
     })
   })
@@ -147,7 +147,7 @@ describe('processBatch ownership', () => {
     await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
 
     expect(prisma.importBatch.updateMany).toHaveBeenCalledWith({
-      where: { id: 'batch_0', importId: 'imp_1', import: { userId: ALICE } },
+      where: { id: 'batch_0', importId: 'imp_1', import: { userId: ALICE }, status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ status: 'PROCESSING' }),
     })
   })
@@ -175,7 +175,7 @@ describe('processBatch ownership', () => {
     expect(prisma.expense.createMany).not.toHaveBeenCalled()
     expect(prisma.importRowError.createMany).not.toHaveBeenCalled()
     expect(prisma.$transaction).not.toHaveBeenCalled()
-    expect(prisma.import.update).not.toHaveBeenCalled()
+    expect(prisma.import.updateMany).not.toHaveBeenCalled()
   })
 
   // It also costs nothing: the claim is the same write that marks the batch
@@ -306,6 +306,73 @@ describe('processBatch partial failure', () => {
   })
 })
 
+// Cancelling cannot remove a message from SQS, so every batch of a cancelled
+// import still gets delivered. This is where they stop: the claim excludes a
+// CANCELLED batch, and the miss is then read as "already settled" rather than
+// as the ownership fault it looks like on the surface.
+describe('processBatch cancellation', () => {
+  beforeEach(() => {
+    // The claim matches nothing, because the row is no longer PENDING.
+    prisma.importBatch.updateMany.mockResolvedValue({ count: 0 })
+  })
+
+  test('does no work for a batch that was cancelled', async () => {
+    prisma.importBatch.findFirst.mockResolvedValue({ status: 'CANCELLED' })
+
+    await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
+
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+    expect(categorizeMerchants).not.toHaveBeenCalled()
+  })
+
+  // Returning instead of throwing is what lets the poller delete the message.
+  // Throwing here would redeliver a batch that can never do anything, three
+  // times, and then park it in the DLQ.
+  test('returns rather than throwing, so the message is deleted', async () => {
+    prisma.importBatch.findFirst.mockResolvedValue({ status: 'CANCELLED' })
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
+    ).resolves.toMatchObject({ settled: 'CANCELLED' })
+  })
+
+  // Same path, different cause: SQS can redeliver a batch whose delete failed.
+  // Reprocessing would be a no-op anyway, so there is nothing to gain by it.
+  test('drops a redelivery of a batch that already completed', async () => {
+    prisma.importBatch.findFirst.mockResolvedValue({ status: 'COMPLETED' })
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 2 })
+    ).resolves.toMatchObject({ settled: 'COMPLETED' })
+
+    expect(prisma.$transaction).not.toHaveBeenCalled()
+  })
+
+  // The distinction the extra query buys. A batch that isn't there at all is a
+  // real fault and still has to reach the DLQ.
+  test('still throws when the batch does not exist for this user', async () => {
+    prisma.importBatch.findFirst.mockResolvedValue(null)
+
+    await expect(
+      processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
+    ).rejects.toThrow(/does not belong/i)
+  })
+
+  // A cancelled import can still have one batch in flight. When it lands, the
+  // finalize must not rewrite the user's decision as COMPLETED.
+  test('the import finalize cannot overwrite a cancellation', async () => {
+    prisma.importBatch.updateMany.mockResolvedValue({ count: 1 })
+    prisma.importBatch.groupBy.mockResolvedValue([{ status: 'COMPLETED', _count: { _all: 8 } }])
+
+    await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
+
+    // The status filter is what makes it a no-op against a CANCELLED row.
+    expect(prisma.import.updateMany.mock.calls[0][0].where.status).toEqual({
+      in: ['PENDING', 'PROCESSING'],
+    })
+  })
+})
+
 describe('processBatch redelivery', () => {
   // At-least-once delivery makes this the normal case, not the exceptional one.
   // Both writes are keyed, so the second pass changes nothing.
@@ -406,8 +473,8 @@ describe('processBatch failure', () => {
       processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: MAX_RECEIVE_COUNT })
     ).rejects.toThrow('Anthropic 503')
 
-    expect(prisma.import.update).toHaveBeenCalledWith({
-      where: { id: 'imp_1' },
+    expect(prisma.import.updateMany).toHaveBeenCalledWith({
+      where: { id: 'imp_1' , status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ status: 'FAILED' }),
     })
   })
@@ -423,8 +490,8 @@ describe('processBatch failure', () => {
       processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: MAX_RECEIVE_COUNT })
     ).rejects.toThrow()
 
-    expect(prisma.import.update).toHaveBeenCalledWith({
-      where: { id: 'imp_1' },
+    expect(prisma.import.updateMany).toHaveBeenCalledWith({
+      where: { id: 'imp_1' , status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ status: 'COMPLETED' }),
     })
   })
@@ -440,7 +507,7 @@ describe('processBatch failure', () => {
       processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: MAX_RECEIVE_COUNT })
     ).rejects.toThrow()
 
-    expect(prisma.import.update).not.toHaveBeenCalled()
+    expect(prisma.import.updateMany).not.toHaveBeenCalled()
   })
 
   // The original error is the one worth reporting; a failure to tidy up after
@@ -478,8 +545,8 @@ describe('processBatch import completion', () => {
 
     await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
 
-    expect(prisma.import.update).toHaveBeenCalledWith({
-      where: { id: 'imp_1' },
+    expect(prisma.import.updateMany).toHaveBeenCalledWith({
+      where: { id: 'imp_1' , status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ status: 'COMPLETED', failedRows: 3 }),
     })
   })
@@ -492,7 +559,7 @@ describe('processBatch import completion', () => {
 
     await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
 
-    expect(prisma.import.update).not.toHaveBeenCalled()
+    expect(prisma.import.updateMany).not.toHaveBeenCalled()
   })
 
   // Counted from ImportRowError rather than accumulated, so a replayed batch
@@ -504,8 +571,8 @@ describe('processBatch import completion', () => {
     await processBatch(batchPayload([csvRow(0, 'X', { amount: 'bad' })]), { receiveCount: 1 })
 
     expect(prisma.importRowError.count).toHaveBeenCalledWith({ where: { importId: 'imp_1' } })
-    expect(prisma.import.update).toHaveBeenCalledWith({
-      where: { id: 'imp_1' },
+    expect(prisma.import.updateMany).toHaveBeenCalledWith({
+      where: { id: 'imp_1' , status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ failedRows: 7 }),
     })
   })
@@ -515,8 +582,8 @@ describe('processBatch import completion', () => {
 
     await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
 
-    expect(prisma.import.update).toHaveBeenCalledWith({
-      where: { id: 'imp_1' },
+    expect(prisma.import.updateMany).toHaveBeenCalledWith({
+      where: { id: 'imp_1' , status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ status: 'FAILED' }),
     })
   })
@@ -531,8 +598,8 @@ describe('processBatch import completion', () => {
 
     await processBatch(batchPayload([csvRow(0, 'WHOLE FOODS')]), { receiveCount: 1 })
 
-    expect(prisma.import.update).toHaveBeenCalledWith({
-      where: { id: 'imp_1' },
+    expect(prisma.import.updateMany).toHaveBeenCalledWith({
+      where: { id: 'imp_1' , status: { in: ['PENDING', 'PROCESSING'] } },
       data: expect.objectContaining({ status: 'COMPLETED' }),
     })
   })
