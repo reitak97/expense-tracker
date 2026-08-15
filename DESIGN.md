@@ -90,23 +90,27 @@ session — a task list there goes stale silently.
 
 Left to do, and all of it needs a console or credentials rather than code:
 
-- [ ] Raise the queue's visibility timeout from **60s** to **300s**. 60s is short for a
-      batch that makes an Anthropic call before it writes anything: an overrun means SQS
-      redelivers work that is still running, so duplicate LLM calls, and a batch can
-      exhaust its three redeliveries while succeeding every time.
-
-      `node scripts/configure-dlq.js --apply` sets it, but the app's IAM user is correctly
-      scoped to runtime actions and has no `sqs:SetQueueAttributes` — the apply fails there
-      and changes nothing. Either grant that action temporarily, run the script under an
-      admin profile, or set the value in the console.
 - [ ] Apply `render.yaml` as a Render Blueprint and set the secrets it declares
-- [ ] CloudWatch alarm on the DLQ's `ApproximateNumberOfMessages` — a dead-letter queue
-      nobody watches is a slower way to lose data
-- [ ] Split the two database URLs. `DATABASE_URL` and `DIRECT_URL` are currently identical,
-      both on the session pooler (5432). Runtime belongs on the transaction pooler (6543,
-      `?pgbouncer=true`); only `DIRECT_URL` needs 5432, for the DDL that migrations run.
-      The worker holds a connection per batch across an LLM call and would be first to
-      exhaust the smaller pool.
+
+Done since:
+
+- [x] CloudWatch alarm on the DLQ. Fires on `ApproximateNumberOfMessagesVisible > 0`
+      (Maximum over 5 minutes) for `expense-imports-dlq`, notifying an SNS topic. Maximum
+      rather than Sum, which would add repeated samples of the same sitting message and
+      read high. Created in the console — the app's IAM user has no `cloudwatch:*`, so
+      this cannot be verified from the repo; check the SNS subscription reads Confirmed
+      rather than PendingConfirmation, which is the way this silently does nothing.
+- [x] Queue visibility timeout raised to **300s** (set in the console; the app's IAM user
+      is scoped to runtime actions and cannot write queue attributes). With
+      `maxReceiveCount` at 3 that gives a batch ~15 minutes of retries, and a batch no
+      longer risks redelivery while its Anthropic call is still in flight. Verified with
+      `node scripts/configure-dlq.js`, which now reports no drift between the queue and
+      `lib/sqs.js`.
+- [x] Split the two database URLs. `DATABASE_URL` now points at the transaction pooler
+      (6543, `?pgbouncer=true`) and `DIRECT_URL` at the session pooler (5432) for the DDL
+      migrations run — the shape `.env.example` already documented, which the live `.env`
+      had drifted from by pointing both at 5432. Verified both paths: `prisma migrate
+      status` over the direct URL, and a live query over the pooled one.
 
 ## Key decisions
 
