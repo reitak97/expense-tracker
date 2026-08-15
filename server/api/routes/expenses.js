@@ -136,6 +136,28 @@ router.patch('/expenses/:id', async (req, res) => {
   }
 })
 
+// DELETE /expenses — remove every expense this user has
+//
+// Declared before the /:id route for readability only. Order does not matter
+// here because the two patterns are disjoint — `/expenses/exp_1` cannot match
+// the bare path. Express matches in registration order, not literal-first, so
+// a future `/expenses/summary` next to `/expenses/:id` would need the specific
+// one declared first. deleteMany rather than a loop: one statement,
+// and the userId filter is the whole safety story — without it this clears the
+// table for everyone.
+router.delete('/expenses', async (req, res) => {
+  try {
+    const { count } = await prisma.expense.deleteMany({ where: { userId: req.userId } })
+
+    // Import rows are left alone. They are a record of what was uploaded and
+    // when, which stays true even after the expenses are gone.
+    res.json({ deleted: count })
+  } catch (error) {
+    console.error('DELETE /expenses error:', error)
+    res.status(500).json({ error: 'Failed to delete expenses' })
+  }
+})
+
 // DELETE /expenses/:id — remove one
 router.delete('/expenses/:id', async (req, res) => {
   try {

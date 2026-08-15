@@ -1,3 +1,5 @@
+import { useState } from 'react'
+
 // Color classes for each category badge.
 // ?? is the "nullish coalescing" operator — falls back to the gray style
 // if a category isn't in this map (e.g. a future category we haven't added yet).
@@ -17,7 +19,34 @@ function formatCents(cents) {
   return (cents / 100).toFixed(2)
 }
 
-export default function ExpenseList({ expenses, onDelete, total }) {
+export default function ExpenseList({ expenses, onDelete, onDeleteAll, total }) {
+  // Two-step, because this one is not undoable. The first click only arms the
+  // button; nothing is sent until the second.
+  const [confirming, setConfirming] = useState(false)
+  const [deleting, setDeleting] = useState(false)
+  const [error, setError] = useState(null)
+
+  async function confirmDeleteAll() {
+    setDeleting(true)
+    setError(null)
+    try {
+      await onDeleteAll()
+      setConfirming(false)
+    } catch (err) {
+      // Stays armed and reports why. Closing the prompt is this component's
+      // only signal that the delete happened, so it must not close on one
+      // that didn't.
+      setError(err.message || 'Could not delete your expenses.')
+    } finally {
+      setDeleting(false)
+    }
+  }
+
+  function cancelDeleteAll() {
+    setConfirming(false)
+    setError(null)
+  }
+
   // Early return — show an empty state instead of an empty list
   if (expenses.length === 0) {
     return (
@@ -32,10 +61,57 @@ export default function ExpenseList({ expenses, onDelete, total }) {
       {/* Header row */}
       <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
         <h2 className="text-lg font-semibold text-gray-800">Expenses</h2>
-        <span className="text-sm text-gray-500">
-          {expenses.length} item{expenses.length !== 1 ? 's' : ''}
-        </span>
+
+        {confirming ? (
+          // The count is spelled out here rather than on the arming button, so
+          // the number is in front of you at the moment you commit to it.
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-gray-600">
+              Delete all {expenses.length} expenses?
+            </span>
+            <button
+              onClick={confirmDeleteAll}
+              disabled={deleting}
+              className="text-sm font-medium text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 px-3 py-1 rounded-lg cursor-pointer"
+            >
+              {deleting ? 'Deleting…' : 'Delete'}
+            </button>
+            <button
+              onClick={cancelDeleteAll}
+              disabled={deleting}
+              className="text-sm font-medium text-gray-500 hover:text-gray-700 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-center gap-4">
+            <span className="text-sm text-gray-500">
+              {expenses.length} item{expenses.length !== 1 ? 's' : ''}
+            </span>
+            <button
+              onClick={() => {
+                setError(null)
+                setConfirming(true)
+              }}
+              className="text-sm font-medium text-gray-400 hover:text-red-600 transition-colors cursor-pointer"
+            >
+              Delete all
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Only rendered after a failed delete. A destructive action that does
+          nothing has to say so — the list looking unchanged is ambiguous. */}
+      {error && (
+        <div
+          role="alert"
+          className="px-6 py-3 bg-red-50 border-b border-red-100 text-sm text-red-700"
+        >
+          {error}
+        </div>
+      )}
 
       {/* Expense rows */}
       <ul>
